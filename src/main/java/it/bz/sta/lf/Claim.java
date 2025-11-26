@@ -1,0 +1,51 @@
+package it.bz.sta.lf;
+
+
+import jakarta.persistence.*;
+import java.time.OffsetDateTime;
+import java.util.UUID;
+
+
+@Entity @Table(name = "claims")
+public class Claim {
+    @Id private UUID id;
+
+
+    @ManyToOne(optional = false) @JoinColumn(name = "item_id")
+    private Item item;
+
+
+    @Column(name = "passenger_name") private String passengerName;
+    @Column(name = "passenger_email") private String passengerEmail;
+    @Column(name = "passenger_phone") private String passengerPhone;
+    private String narrative;
+
+
+    @Column(nullable = false) private String status = "new"; // new, in_review, approved, rejected, closed
+    private String method; // pickup | ship
+    @Column(name = "fee_cents") private Integer feeCents = 0;
+    @Column(length = 3)
+    private String currency = "EUR";
+
+
+    @Column(name = "submitted_at") private OffsetDateTime submittedAt = OffsetDateTime.now();
+    @Column(name = "updated_at") private OffsetDateTime updatedAt = OffsetDateTime.now();
+
+
+    public Claim() {}
+
+
+    // getters/setters
+    public UUID getId(){ return id; } public void setId(UUID id){ this.id=id; }
+    public Item getItem(){ return item; } public void setItem(Item item){ this.item=item; }
+    public String getPassengerName(){ return passengerName; } public void setPassengerName(String v){ this.passengerName=v; }
+    public String getPassengerEmail(){ return passengerEmail; } public void setPassengerEmail(String v){ this.passengerEmail=v; }
+    public String getPassengerPhone(){ return passengerPhone; } public void setPassengerPhone(String v){ this.passengerPhone=v; }
+    public String getNarrative(){ return narrative; } public void setNarrative(String v){ this.narrative=v; }
+    public String getStatus(){ return status; } public void setStatus(String v){ this.status=v; }
+    public String getMethod(){ return method; } public void setMethod(String v){ this.method=v; }
+    public Integer getFeeCents(){ return feeCents; } public void setFeeCents(Integer v){ this.feeCents=v; }
+    public String getCurrency(){ return currency; } public void setCurrency(String v){ this.currency=v; }
+    public OffsetDateTime getSubmittedAt(){ return submittedAt; } public void setSubmittedAt(OffsetDateTime v){ this.submittedAt=v; }
+    public OffsetDateTime getUpdatedAt(){ return updatedAt; } public void setUpdatedAt(OffsetDateTime v){ this.updatedAt=v; }
+}

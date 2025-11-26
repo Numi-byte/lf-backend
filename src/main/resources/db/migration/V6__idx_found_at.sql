@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS idx_items_found_at ON items(found_at);
