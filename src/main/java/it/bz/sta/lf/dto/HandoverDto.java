@@ -9,32 +9,19 @@ public record HandoverDto(
         UUID id,
         UUID itemId,
         UUID depotId,
-
-        // PERSON | COMUNE
         String type,
-
         String performedBy,
-
-        // PERSON handover
         String personName,
         String documentType,
         String documentNumber,
-
-        // COMUNE handover
         String comuneName,
         String comuneReference,
-
         String notes,
         String attachmentKey,
-
-        // raw keys in S3/MinIO (for debugging / admin)
         String docFrontKey,
         String docBackKey,
-
-        // presigned URLs (for React UI thumbnails / full view)
         String docFrontUrl,
         String docBackUrl,
-
         OffsetDateTime createdAt
 ) {
     public static HandoverDto from(Handover h, String docFrontUrl, String docBackUrl) {

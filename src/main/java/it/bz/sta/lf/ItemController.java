@@ -125,10 +125,34 @@ public class ItemController {
         try { if (from != null && !from.isBlank()) fromTs = OffsetDateTime.parse(from); } catch (Exception ignored) {}
         try { if (to   != null && !to.isBlank())   toTs   = OffsetDateTime.parse(to);   } catch (Exception ignored) {}
 
-        return repo.search(text, state, fromTs, toTs, depotId)
-                .stream()
-                .map(ItemDto::from)
-                .toList();
+        // 1) DB: filter by state + depot
+        List<Item> items = repo.search(state, depotId);
+
+        // 2) Java: filter by date range (to avoid Postgres type issues)
+        if (fromTs != null) {
+            OffsetDateTime finalFromTs = fromTs;
+            items = items.stream()
+                    .filter(i -> i.getFoundAt() != null && !i.getFoundAt().isBefore(finalFromTs))
+                    .toList();
+        }
+
+        if (toTs != null) {
+            OffsetDateTime finalToTs = toTs;
+            items = items.stream()
+                    .filter(i -> i.getFoundAt() != null && !i.getFoundAt().isAfter(finalToTs))
+                    .toList();
+        }
+
+        // 3) Java: free-text search on description
+        if (text != null && !text.isBlank()) {
+            String needle = text.toLowerCase();
+            items = items.stream()
+                    .filter(i -> i.getDescription() != null &&
+                            i.getDescription().toLowerCase().contains(needle))
+                    .toList();
+        }
+
+        return items.stream().map(ItemDto::from).toList();
     }
 
     // ---------- Archive search for CS (RETURNED + TRANSFERRED_TO_COMUNE) ----------
@@ -143,9 +167,35 @@ public class ItemController {
         try { if (from != null && !from.isBlank()) fromTs = OffsetDateTime.parse(from); } catch (Exception ignored) {}
         try { if (to   != null && !to.isBlank())   toTs   = OffsetDateTime.parse(to);   } catch (Exception ignored) {}
 
-        return repo.searchArchive(text, fromTs, toTs, depotId)
-                .stream()
-                .map(ItemDto::from)
-                .toList();
+        // 1) DB: only archive states + depot
+        List<Item> items = repo.searchArchive(depotId);
+
+        // 2) Java: date filter
+        if (fromTs != null) {
+            OffsetDateTime finalFromTs = fromTs;
+            items = items.stream()
+                    .filter(i -> i.getFoundAt() != null && !i.getFoundAt().isBefore(finalFromTs))
+                    .toList();
+        }
+
+        if (toTs != null) {
+            OffsetDateTime finalToTs = toTs;
+            items = items.stream()
+                    .filter(i -> i.getFoundAt() != null && !i.getFoundAt().isAfter(finalToTs))
+                    .toList();
+        }
+
+        // 3) Java: text filter
+        if (text != null && !text.isBlank()) {
+            String needle = text.toLowerCase();
+            items = items.stream()
+                    .filter(i -> i.getDescription() != null &&
+                            i.getDescription().toLowerCase().contains(needle))
+                    .toList();
+        }
+
+        return items.stream().map(ItemDto::from).toList();
     }
+
 }
+

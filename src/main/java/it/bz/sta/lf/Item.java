@@ -9,11 +9,11 @@ import java.util.UUID;
 public class Item {
 
     // Central definition of all allowed states (must match DB check constraint)
-    public static final String STATE_REPORTED              = "REPORTED";
-    public static final String STATE_SHELVED               = "SHELVED";
-    public static final String STATE_ON_HOLD               = "ON_HOLD";
-    public static final String STATE_RETURNED              = "RETURNED";
-    public static final String STATE_READY_FOR_TRANSFER    = "READY_FOR_TRANSFER";
+    public static final String STATE_REPORTED             = "REPORTED";
+    public static final String STATE_SHELVED              = "SHELVED";
+    public static final String STATE_ON_HOLD              = "ON_HOLD";
+    public static final String STATE_READY_FOR_TRANSFER   = "READY_FOR_TRANSFER";
+    public static final String STATE_RETURNED             = "RETURNED";
     public static final String STATE_TRANSFERRED_TO_COMUNE = "TRANSFERRED_TO_COMUNE";
 
     @Id
