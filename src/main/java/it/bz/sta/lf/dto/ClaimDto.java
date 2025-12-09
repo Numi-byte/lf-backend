@@ -1,10 +1,8 @@
 package it.bz.sta.lf.dto;
 
-
 import it.bz.sta.lf.Claim;
 import java.time.OffsetDateTime;
 import java.util.UUID;
-
 
 public record ClaimDto(
         UUID id,
@@ -18,7 +16,8 @@ public record ClaimDto(
         String passengerPhone,
         String narrative,
         OffsetDateTime submittedAt,
-        OffsetDateTime updatedAt
+        OffsetDateTime updatedAt,
+        String publicReferenceCode   // NEW
 ) {
     public static ClaimDto from(Claim c){
         return new ClaimDto(
@@ -33,7 +32,8 @@ public record ClaimDto(
                 c.getPassengerPhone(),
                 c.getNarrative(),
                 c.getSubmittedAt(),
-                c.getUpdatedAt()
+                c.getUpdatedAt(),
+                c.getPublicReferenceCode()
         );
     }
 }

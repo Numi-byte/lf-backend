@@ -29,9 +29,23 @@ public class ItemPhotoController {
 
 
     @PostMapping(path="/{id}/photos", consumes = {"multipart/form-data"})
-    public ResponseEntity<ItemPhotoDto> upload(@PathVariable("id") UUID itemId, @RequestParam("file") MultipartFile file) throws Exception {
-        Item item = items.findById(itemId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
-        if (file == null || file.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "file is required");
+    public ResponseEntity<ItemPhotoDto> upload(
+            @PathVariable("id") UUID itemId,
+            @RequestParam("file") MultipartFile file,
+            @RequestHeader(value = "X-User", required = false) String user
+    ) throws Exception {
+
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to upload item photos");
+        }
+
+        Item item = items.findById(itemId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
+
+        if (file == null || file.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "file is required");
+        }
+
         String key = "items/" + itemId + "/" + UUID.randomUUID();
         try (var in = file.getInputStream()) {
             storage.put(key, in, file.getSize(), file.getContentType());
@@ -47,10 +61,19 @@ public class ItemPhotoController {
         return ResponseEntity.status(201).body(ItemPhotoDto.from(p, url));
     }
 
-
     @GetMapping("/{id}/photos")
-    public List<ItemPhotoDto> list(@PathVariable("id") UUID itemId) throws Exception {
-        items.findById(itemId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
+    public List<ItemPhotoDto> list(
+            @PathVariable("id") UUID itemId,
+            @RequestHeader(value = "X-User", required = false) String user
+    ) throws Exception {
+
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to view item photos");
+        }
+
+        items.findById(itemId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
+
         List<ItemPhoto> list = photos.findByItemId(itemId);
         List<ItemPhotoDto> out = new ArrayList<>();
         for (ItemPhoto p : list) {
@@ -60,11 +83,22 @@ public class ItemPhotoController {
         return out;
     }
 
-
     @DeleteMapping("/{itemId}/photos/{photoId}")
-    public ResponseEntity<Void> delete(@PathVariable("itemId") UUID itemId, @PathVariable("photoId") UUID photoId) throws Exception {
-        ItemPhoto p = photos.findById(photoId).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "photo not found"));
-        if (!p.getItem().getId().equals(itemId)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "photo does not belong to item");
+    public ResponseEntity<Void> delete(
+            @PathVariable("itemId") UUID itemId,
+            @PathVariable("photoId") UUID photoId,
+            @RequestHeader(value = "X-User", required = false) String user
+    ) throws Exception {
+
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to delete item photos");
+        }
+
+        ItemPhoto p = photos.findById(photoId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "photo not found"));
+        if (!p.getItem().getId().equals(itemId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "photo does not belong to item");
+        }
         storage.delete(p.getObjectKey());
         photos.delete(p);
         return ResponseEntity.noContent().build();

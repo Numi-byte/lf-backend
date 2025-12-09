@@ -62,6 +62,10 @@ public class HandoverController {
             @RequestBody HandoverReq req,
             @RequestHeader(value = "X-User", required = false) String user
     ) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to create handover");
+        }
+
         Item item = items.findById(itemId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
 
@@ -108,7 +112,7 @@ public class HandoverController {
 
         handovers.save(h);
 
-        // 🔹 NEW: set item state based on type (no more "archived")
+        // 🔹 set item state based on type
         String before = "{\"state\":\"" + item.getState() + "\"}";
 
         switch (type) {
@@ -136,7 +140,6 @@ public class HandoverController {
 
     /**
      * 2) Upload BOTH sides of the document for this handover.
-     *    This is where your requirement "photo of both sides" is enforced.
      *
      *    POST /handovers/{id}/docs
      *    form-data:
@@ -147,8 +150,13 @@ public class HandoverController {
     public ResponseEntity<HandoverDto> uploadDocs(
             @PathVariable("id") UUID handoverId,
             @RequestParam("front") MultipartFile front,
-            @RequestParam("back") MultipartFile back
+            @RequestParam("back") MultipartFile back,
+            @RequestHeader(value = "X-User", required = false) String user
     ) throws Exception {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to upload handover docs");
+        }
+
         Handover h = handovers.findById(handoverId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "handover not found"));
 
@@ -175,9 +183,17 @@ public class HandoverController {
     }
 
     @GetMapping("/items/{id}/handovers")
-    public List<HandoverDto> listForItem(@PathVariable("id") UUID itemId) {
+    public List<HandoverDto> listForItem(
+            @PathVariable("id") UUID itemId,
+            @RequestHeader(value = "X-User", required = false) String user
+    ) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to view handovers");
+        }
+
         items.findById(itemId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
+
         return handovers.findByItemId(itemId).stream().map(this::toDto).toList();
     }
 
@@ -186,8 +202,13 @@ public class HandoverController {
             @RequestParam(name = "depotId", required = false) UUID depotId,
             @RequestParam(name = "from", required = false) String from,
             @RequestParam(name = "to", required = false) String to,
-            @RequestParam(name = "text", required = false) String text
+            @RequestParam(name = "text", required = false) String text,
+            @RequestHeader(value = "X-User", required = false) String user
     ) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to search handovers");
+        }
+
         OffsetDateTime fromTs = null;
         OffsetDateTime toTs = null;
 
@@ -216,7 +237,6 @@ public class HandoverController {
                 .map(this::toDto)
                 .toList();
     }
-
 
     private HandoverDto toDto(Handover h) {
         String frontUrl = null;

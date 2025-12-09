@@ -62,6 +62,10 @@ public class TransferManifestController {
             @RequestBody PrepareComuneTransferReq req,
             @RequestHeader(value = "X-User", required = false) String user
     ) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to prepare Comune transfer");
+        }
+
         if (req == null || req.depotId() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "depotId is required");
         }
@@ -170,6 +174,10 @@ public class TransferManifestController {
             @RequestParam(name = "signedBy", required = false) String signedBy,
             @RequestHeader(value = "X-User", required = false) String user
     ) throws Exception {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to sign Comune transfer");
+        }
+
         TransferManifest m = manifests.findById(manifestId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "manifest not found"));
 
@@ -221,22 +229,34 @@ public class TransferManifestController {
         return ResponseEntity.ok(toDto(m));
     }
 
-    // --- 3) Get single manifest with lines ---
+    // --- 3) Get single manifest with lines (internal) ---
 
     @GetMapping("/{id}")
-    public ResponseEntity<TransferManifestDto> getOne(@PathVariable("id") UUID manifestId) {
+    public ResponseEntity<TransferManifestDto> getOne(
+            @PathVariable("id") UUID manifestId,
+            @RequestHeader(value = "X-User", required = false) String user
+    ) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to view Comune transfers");
+        }
+
         return manifests.findById(manifestId)
                 .map(m -> ResponseEntity.ok(toDto(m)))
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    // --- 4) List manifests (optionally by depotId and/or status) ---
+    // --- 4) List manifests (internal) ---
 
     @GetMapping
     public List<TransferManifestDto> list(
             @RequestParam(name = "depotId", required = false) UUID depotId,
-            @RequestParam(name = "status", required = false) String status
+            @RequestParam(name = "status", required = false) String status,
+            @RequestHeader(value = "X-User", required = false) String user
     ) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to list Comune transfers");
+        }
+
         List<TransferManifest> src;
 
         if (depotId != null && status != null && !status.isBlank()) {

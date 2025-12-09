@@ -28,40 +28,72 @@ public class ItemController {
     public record CreateItem(String description) {}
     public record StoreReq(UUID locationId) {}
 
-    // ---------- Basic list ----------
+    // ---------- Basic list (internal, login required) ----------
     @GetMapping
-    public List<ItemDto> all() {
+    public List<ItemDto> all(
+            @RequestHeader(value = "X-User", required = false) String user
+    ) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to list items");
+        }
+
         return repo.findAll().stream().map(ItemDto::from).toList();
     }
 
-    // ---------- Get single item by id ----------
+    // ---------- Get single item by id (internal, login required) ----------
     @GetMapping("/{id}")
-    public ResponseEntity<ItemDto> getOne(@PathVariable("id") UUID id) {
+    public ResponseEntity<ItemDto> getOne(
+            @PathVariable("id") UUID id,
+            @RequestHeader(value = "X-User", required = false) String user
+    ) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to view items");
+        }
+
         return repo.findById(id)
                 .map(item -> ResponseEntity.ok(ItemDto.from(item)))
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    // ---------- Create → REPORTED ----------
+    // ---------- Create → REPORTED (internal, login required) ----------
     @PostMapping
-    public ResponseEntity<ItemDto> create(@RequestBody CreateItem req) {
+    public ResponseEntity<ItemDto> create(
+            @RequestBody CreateItem req,
+            @RequestHeader(value = "X-User", required = false) String user
+    ) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to create items");
+        }
+
         if (req == null || req.description() == null || req.description().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "description is required");
         }
+
         Item item = new Item(UUID.randomUUID(), req.description(), OffsetDateTime.now());
         // state defaults to REPORTED in entity
         Item saved = repo.save(item);
-        audits.log("ITEM_REPORTED", "ITEM", saved.getId(), null,
-                "{\"description\":\"" + saved.getDescription() + "\"}");
+
+        audits.log(
+                "ITEM_REPORTED",
+                "ITEM",
+                saved.getId(),
+                user,
+                "{\"description\":\"" + saved.getDescription() + "\"}"
+        );
+
         return ResponseEntity.ok(ItemDto.from(saved));
     }
 
-    // ---------- Store → SHELVED ----------
+    // ---------- Store → SHELVED (internal, login required) ----------
     @PostMapping("/{id}/store")
     public ResponseEntity<ItemDto> store(
             @PathVariable("id") UUID id,
             @RequestBody StoreReq req,
-            @RequestHeader(value = "X-User", required = false) String user) {
+            @RequestHeader(value = "X-User", required = false) String user
+    ) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to store items");
+        }
 
         if (req == null || req.locationId() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "locationId is required");
@@ -81,17 +113,26 @@ public class ItemController {
 
         String after = "{\"state\":\"" + it.getState() + "\",\"currentLocationId\":\"" + loc.getId() + "\"}";
 
-        audits.log("ITEM_SHELVED", "ITEM", it.getId(), user,
-                "{\"before\":" + before + ",\"after\":" + after + "}");
+        audits.log(
+                "ITEM_SHELVED",
+                "ITEM",
+                it.getId(),
+                user,
+                "{\"before\":" + before + ",\"after\":" + after + "}"
+        );
 
         return ResponseEntity.ok(ItemDto.from(it));
     }
 
-    // ---------- Mark READY_FOR_TRANSFER (manual for now) ----------
+    // ---------- Mark READY_FOR_TRANSFER (internal, login required) ----------
     @PostMapping("/{id}/ready-for-transfer")
     public ResponseEntity<ItemDto> readyForTransfer(
             @PathVariable("id") UUID id,
-            @RequestHeader(value = "X-User", required = false) String user) {
+            @RequestHeader(value = "X-User", required = false) String user
+    ) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to mark items READY_FOR_TRANSFER");
+        }
 
         Item it = repo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
@@ -106,21 +147,31 @@ public class ItemController {
         it.setState(Item.STATE_READY_FOR_TRANSFER);
         String after = "{\"state\":\"" + it.getState() + "\"}";
 
-        audits.log("ITEM_READY_FOR_TRANSFER", "ITEM", it.getId(), user,
-                "{\"before\":" + before + ",\"after\":" + after + "}");
+        audits.log(
+                "ITEM_READY_FOR_TRANSFER",
+                "ITEM",
+                it.getId(),
+                user,
+                "{\"before\":" + before + ",\"after\":" + after + "}"
+        );
 
         return ResponseEntity.ok(ItemDto.from(it));
     }
 
-    // ---------- General search ----------
+    // ---------- General search (internal, login required) ----------
     @GetMapping("/search")
     public List<ItemDto> search(
             @RequestParam(name = "text", required = false) String text,
             @RequestParam(name = "state", required = false) String state,
             @RequestParam(name = "from", required = false) String from,
             @RequestParam(name = "to", required = false) String to,
-            @RequestParam(name = "depotId", required = false) UUID depotId
+            @RequestParam(name = "depotId", required = false) UUID depotId,
+            @RequestHeader(value = "X-User", required = false) String user
     ) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to search items");
+        }
+
         OffsetDateTime fromTs = null, toTs = null;
         try { if (from != null && !from.isBlank()) fromTs = OffsetDateTime.parse(from); } catch (Exception ignored) {}
         try { if (to   != null && !to.isBlank())   toTs   = OffsetDateTime.parse(to);   } catch (Exception ignored) {}
@@ -128,7 +179,7 @@ public class ItemController {
         // 1) DB: filter by state + depot
         List<Item> items = repo.search(state, depotId);
 
-        // 2) Java: filter by date range (to avoid Postgres type issues)
+        // 2) Java: filter by date range
         if (fromTs != null) {
             OffsetDateTime finalFromTs = fromTs;
             items = items.stream()
@@ -161,8 +212,13 @@ public class ItemController {
             @RequestParam(name = "text", required = false) String text,
             @RequestParam(name = "from", required = false) String from,
             @RequestParam(name = "to", required = false) String to,
-            @RequestParam(name = "depotId", required = false) UUID depotId
+            @RequestParam(name = "depotId", required = false) UUID depotId,
+            @RequestHeader(value = "X-User", required = false) String user
     ) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to search archive");
+        }
+
         OffsetDateTime fromTs = null, toTs = null;
         try { if (from != null && !from.isBlank()) fromTs = OffsetDateTime.parse(from); } catch (Exception ignored) {}
         try { if (to   != null && !to.isBlank())   toTs   = OffsetDateTime.parse(to);   } catch (Exception ignored) {}
@@ -196,6 +252,4 @@ public class ItemController {
 
         return items.stream().map(ItemDto::from).toList();
     }
-
 }
-
