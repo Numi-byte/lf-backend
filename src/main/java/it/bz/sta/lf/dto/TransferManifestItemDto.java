@@ -9,7 +9,8 @@ public record TransferManifestItemDto(
         UUID id,
         UUID itemId,
         String shortCode,
-        String category,
+        String categoryMain,
+        String categorySub,
         OffsetDateTime foundAt,
         String foundPlace,
         String photoUrl
@@ -19,7 +20,8 @@ public record TransferManifestItemDto(
                 line.getId(),
                 line.getItem().getId(),
                 line.getShortCode(),
-                line.getCategory(),
+                line.getCategoryMain(),
+                line.getCategorySub(),
                 line.getFoundAt(),
                 line.getFoundPlace(),
                 photoUrl

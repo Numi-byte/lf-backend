@@ -94,27 +94,44 @@ public class ClaimController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "itemId is required");
         }
 
+        if (req.passengerName() == null || req.passengerName().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "passengerName is required");
+        }
+        if (req.passengerEmail() == null || req.passengerEmail().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "passengerEmail is required");
+        }
+
+        String normalizedEmail = req.passengerEmail().trim().toLowerCase();
+
         Item item = items.findById(req.itemId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
 
         Claim c = new Claim();
         c.setId(UUID.randomUUID());
         c.setItem(item);
+
         c.setPassengerName(req.passengerName());
-        c.setPassengerEmail(req.passengerEmail());
+        c.setPassengerEmail(normalizedEmail);
         c.setPassengerPhone(req.passengerPhone());
         c.setNarrative(req.narrative());
+
         c.setStatus("new");
         c.setSubmittedAt(OffsetDateTime.now());
         c.setUpdatedAt(OffsetDateTime.now());
 
-        Claim saved = claims.save(c);
+        // Always set a reference code (useful for CS even for internal claims)
+        String refCode = c.getId().toString().substring(0, 8).toUpperCase();
+        c.setPublicReferenceCode(refCode);
+
+        // NOTE: We do NOT set publicUserId here, because this is an internal endpoint.
+        // The public portal endpoint sets publicUserId explicitly.
 
         // --- Wallet / ID-card match logic (optional) ---
         String docMatchStatus = "NOT_PROVIDED";
 
         if (req.docNumber() != null && !req.docNumber().isBlank()) {
             LocalDate birthdate = null;
+
             if (req.docBirthdate() != null && !req.docBirthdate().isBlank()) {
                 try {
                     birthdate = LocalDate.parse(req.docBirthdate());
@@ -142,6 +159,8 @@ public class ClaimController {
             }
         }
 
+        Claim saved = claims.save(c);
+
         // Store result only in audit details (no need to persist docNumber)
         audits.log(
                 "CLAIM_CREATED",
@@ -150,6 +169,7 @@ public class ClaimController {
                 user,
                 "{"
                         + "\"itemId\":\"" + item.getId() + "\","
+                        + "\"publicRef\":\"" + refCode + "\","
                         + "\"docMatchStatus\":\"" + docMatchStatus + "\""
                         + "}"
         );
@@ -172,7 +192,7 @@ public class ClaimController {
         Claim c = claims.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "claim not found"));
 
-        if (req == null || req.method() == null) {
+        if (req == null || req.method() == null || req.method().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "method is required");
         }
 
@@ -181,7 +201,7 @@ public class ClaimController {
         c.setFeeCents(req.feeCents() == null ? 0 : req.feeCents());
         c.setUpdatedAt(OffsetDateTime.now());
 
-        // 🔹 Link to item → set ON_HOLD
+        // Link to item → set ON_HOLD
         Item item = c.getItem();
         if (item != null) {
             String before = "{\"state\":\"" + item.getState() + "\"}";
@@ -224,7 +244,6 @@ public class ClaimController {
         return ResponseEntity.ok(ClaimDto.from(c));
     }
 
-    // ----- helper: SHA-256 hex -----
     private static String sha256Hex(String input) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");

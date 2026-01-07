@@ -18,16 +18,18 @@ public class ItemDocumentController {
 
     private final ItemRepository items;
     private final ItemDocumentRepository docs;
+    private final AuditService audits;
 
-    public ItemDocumentController(ItemRepository items, ItemDocumentRepository docs) {
+    public ItemDocumentController(ItemRepository items, ItemDocumentRepository docs, AuditService audits) {
         this.items = items;
         this.docs = docs;
+        this.audits = audits;
     }
 
     public record DocumentReq(
             String docType,       // e.g. "ITALIAN_ID"
             String docName,       // name on the document
-            String docBirthdate,  // "YYYY-MM-DD"
+            String docBirthdate,  // "YYYY-MM-DD" or null
             String docIssuer,     // Comune, etc.
             String docNumber      // e.g. "AA12345BB"
     ) {}
@@ -65,13 +67,7 @@ public class ItemDocumentController {
 
     /**
      * Create or replace document info for an item.
-     *
      * POST /items/{id}/id-document
-     *
-     * - Requires login (X-User).
-     * - Normalized token:
-     *      digits(docNumber) + "|" + docBirthdate (if provided)
-     *   hashed with SHA-256 into doc_match_hash.
      */
     @PostMapping("/{id}/id-document")
     public ResponseEntity<DocumentDto> createOrUpdate(
@@ -98,22 +94,20 @@ public class ItemDocumentController {
             try {
                 birthdate = LocalDate.parse(req.docBirthdate());
             } catch (DateTimeParseException e) {
-                throw new ResponseStatusException(
-                        HttpStatus.BAD_REQUEST,
-                        "invalid docBirthdate, expected YYYY-MM-DD"
-                );
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid docBirthdate, expected YYYY-MM-DD");
             }
         }
 
-        // Normalize: numeric part of the document number + '|' + birthdate
+        // MUST match PublicItemController normalization
         String digits = req.docNumber().replaceAll("\\D", "");
         String tokenBase = digits + "|" + (birthdate != null ? birthdate.toString() : "");
-
         String hash = sha256Hex(tokenBase);
 
-        // For simplicity: keep only one document per item
+        // Keep only one doc per item
         List<ItemDocument> existing = docs.findByItem_Id(itemId);
-        docs.deleteAll(existing);
+        if (!existing.isEmpty()) {
+            docs.deleteAllInBatch(existing);
+        }
 
         ItemDocument d = new ItemDocument();
         d.setId(UUID.randomUUID());
@@ -122,16 +116,24 @@ public class ItemDocumentController {
         d.setDocName(req.docName());
         d.setDocBirthdate(birthdate);
         d.setDocIssuer(req.docIssuer());
-        d.setDocNumberFull(req.docNumber());
+        d.setDocNumberFull(req.docNumber());   // NOTE: stores full value (see note below)
         d.setDocMatchHash(hash);
 
         ItemDocument saved = docs.save(d);
+
+        audits.log(
+                "ITEM_DOCUMENT_SET",
+                "ITEM",
+                item.getId(),
+                user,
+                "{\"docType\":\"" + req.docType() + "\",\"birthdateProvided\":" + (birthdate != null) + "}"
+        );
+
         return ResponseEntity.status(201).body(DocumentDto.from(saved));
     }
 
     /**
      * List document info for an item (internal-only; masked number).
-     *
      * GET /items/{id}/id-document
      */
     @GetMapping("/{id}/id-document")

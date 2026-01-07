@@ -23,7 +23,7 @@ public class TransferManifestItem {
     @Column(name = "short_code")
     private String shortCode;
 
-    private String category;
+    private String category; // we will treat this as categorySub
 
     @Column(name = "found_at")
     private OffsetDateTime foundAt;
@@ -33,6 +33,9 @@ public class TransferManifestItem {
 
     @Column(name = "photo_key")
     private String photoKey;
+
+    @Column(name = "category_main")
+    private String categoryMain;
 
     public TransferManifestItem() {}
 
@@ -59,4 +62,10 @@ public class TransferManifestItem {
 
     public String getPhotoKey() { return photoKey; }
     public void setPhotoKey(String photoKey) { this.photoKey = photoKey; }
+
+    public String getCategoryMain() { return categoryMain; }
+    public void setCategoryMain(String categoryMain) { this.categoryMain = categoryMain; }
+
+    public String getCategorySub() { return category; }
+    public void setCategorySub(String categorySub) { this.category = categorySub; }
 }

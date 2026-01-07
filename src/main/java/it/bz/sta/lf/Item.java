@@ -28,6 +28,12 @@ public class Item {
     @Column(nullable = false)
     private String state = STATE_REPORTED;
 
+    @Column(name = "category_main", nullable = false)
+    private String categoryMain = "MISC";
+
+    @Column(name = "category_sub", nullable = false)
+    private String categorySub = "OTHER";
+
     @ManyToOne
     @JoinColumn(name = "current_location_id")
     private Location currentLocation;
@@ -55,4 +61,11 @@ public class Item {
 
     public Location getCurrentLocation() { return currentLocation; }
     public void setCurrentLocation(Location currentLocation) { this.currentLocation = currentLocation; }
+
+    public String getCategoryMain() { return categoryMain; }
+    public void setCategoryMain(String categoryMain) { this.categoryMain = categoryMain; }
+
+    public String getCategorySub() { return categorySub; }
+    public void setCategorySub(String categorySub) { this.categorySub = categorySub; }
+
 }

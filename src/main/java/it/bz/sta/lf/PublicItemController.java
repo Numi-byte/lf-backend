@@ -42,9 +42,9 @@ public class PublicItemController {
 
     // ==== 1) Public ID-match request body ====
     public record IdMatchRequest(
-            String docType,       // e.g. "ITALIAN_ID"
-            String docBirthdate,  // "YYYY-MM-DD" or null
-            String docNumber      // e.g. "AA12345BB"
+            String docType,
+            String docBirthdate,
+            String docNumber
     ) {}
 
     // ==== 2) Public "start claim" request body ====
@@ -55,7 +55,10 @@ public class PublicItemController {
             String narrative
     ) {}
 
-    // ==== 3) Public search (text/date/depot) ====
+    // =========================================================
+    // 3) Anonymous public search (NO depot filter, NO depotName)
+    // GET /public/items/search
+    // =========================================================
     @GetMapping("/search")
     public List<PublicItemDto> search(
             @RequestParam(name = "text", required = false) String text,
@@ -63,13 +66,20 @@ public class PublicItemController {
             @RequestParam(name = "to", required = false) String to,
             @RequestParam(name = "depotId", required = false) UUID depotId
     ) {
+        // SECURITY: do not allow depot probing by UUID on anonymous endpoint.
+        if (depotId != null) {
+            log.debug("Ignoring depotId filter on anonymous public search. depotId={}", depotId);
+            depotId = null;
+        }
+
         OffsetDateTime fromTs = null, toTs = null;
         try { if (from != null && !from.isBlank()) fromTs = OffsetDateTime.parse(from); } catch (Exception ignored) {}
         try { if (to   != null && !to.isBlank())   toTs   = OffsetDateTime.parse(to);   } catch (Exception ignored) {}
 
-        List<Item> list = items.search(null, depotId);
+        // global search (no depot filtering)
+        List<Item> list = items.search(null, null);
 
-        // Exclude archived states
+        // exclude archived
         list = list.stream()
                 .filter(i -> !Item.STATE_RETURNED.equals(i.getState())
                         && !Item.STATE_TRANSFERRED_TO_COMUNE.equals(i.getState()))
@@ -96,25 +106,82 @@ public class PublicItemController {
                     .toList();
         }
 
-        return list.stream().map(PublicItemDto::from).toList();
+        return list.stream().map(PublicItemDto::fromAnonymous).toList();
     }
 
-    // ==== 4) Public get-one (redacted) ====
+    // =========================================================
+    // 3B) Member search (LOGIN REQUIRED, depot filter allowed, depotName visible)
+    // GET /public/items/member-search
+    // =========================================================
+    @GetMapping("/member-search")
+    public List<PublicItemDto> memberSearch(
+            @RequestParam(name = "text", required = false) String text,
+            @RequestParam(name = "from", required = false) String from,
+            @RequestParam(name = "to", required = false) String to,
+            @RequestParam(name = "depotId", required = false) UUID depotId,
+            @RequestHeader(value = "X-User", required = false) String user
+    ) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required");
+        }
+
+        OffsetDateTime fromTs = null, toTs = null;
+        try { if (from != null && !from.isBlank()) fromTs = OffsetDateTime.parse(from); } catch (Exception ignored) {}
+        try { if (to   != null && !to.isBlank())   toTs   = OffsetDateTime.parse(to);   } catch (Exception ignored) {}
+
+        List<Item> list = items.search(null, depotId);
+
+        // exclude archived
+        list = list.stream()
+                .filter(i -> !Item.STATE_RETURNED.equals(i.getState())
+                        && !Item.STATE_TRANSFERRED_TO_COMUNE.equals(i.getState()))
+                .toList();
+
+        if (fromTs != null) {
+            OffsetDateTime f = fromTs;
+            list = list.stream()
+                    .filter(i -> i.getFoundAt() != null && !i.getFoundAt().isBefore(f))
+                    .toList();
+        }
+        if (toTs != null) {
+            OffsetDateTime t = toTs;
+            list = list.stream()
+                    .filter(i -> i.getFoundAt() != null && !i.getFoundAt().isAfter(t))
+                    .toList();
+        }
+
+        if (text != null && !text.isBlank()) {
+            String needle = text.toLowerCase();
+            list = list.stream()
+                    .filter(i -> i.getDescription() != null
+                            && i.getDescription().toLowerCase().contains(needle))
+                    .toList();
+        }
+
+        return list.stream().map(PublicItemDto::fromMember).toList();
+    }
+
+    // =========================================================
+    // 4) Public get-one (anonymous redacted)
+    // GET /public/items/{id}
+    // =========================================================
     @GetMapping("/{id}")
     public PublicItemDto getOne(@PathVariable("id") UUID id) {
         Item item = items.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
 
-        // Hide archived items from public as well
         if (Item.STATE_RETURNED.equals(item.getState()) ||
                 Item.STATE_TRANSFERRED_TO_COMUNE.equals(item.getState())) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found");
         }
 
-        return PublicItemDto.from(item);
+        return PublicItemDto.fromAnonymous(item);
     }
 
-    // ==== 5) Public ID-card match (requires login + rate-limited) ====
+    // =========================================================
+    // 5) Public ID-match (LOGIN REQUIRED + rate-limited, returns member DTO)
+    // POST /public/items/id-match
+    // =========================================================
     @PostMapping("/id-match")
     public List<PublicItemDto> matchById(
             @RequestBody IdMatchRequest req,
@@ -124,7 +191,6 @@ public class PublicItemController {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to search by ID document");
         }
 
-        // Rate limiting per X-User
         rateLimiter.checkAllowed(user);
 
         if (req == null || req.docNumber() == null || req.docNumber().isBlank()) {
@@ -136,21 +202,16 @@ public class PublicItemController {
             try {
                 birthdate = LocalDate.parse(req.docBirthdate());
             } catch (DateTimeParseException e) {
-                throw new ResponseStatusException(
-                        HttpStatus.BAD_REQUEST,
-                        "invalid docBirthdate, expected YYYY-MM-DD"
-                );
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid docBirthdate, expected YYYY-MM-DD");
             }
         }
 
-        // --- Normalization MUST match ItemDocumentController ---
         String digits = req.docNumber().replaceAll("\\D", "");
         String tokenBase = digits + "|" + (birthdate != null ? birthdate.toString() : "");
         String hash = sha256Hex(tokenBase);
 
         List<ItemDocument> matches = docs.findByDocMatchHash(hash);
 
-        // Map to distinct items
         List<Item> candidateItems = matches.stream()
                 .map(ItemDocument::getItem)
                 .filter(Objects::nonNull)
@@ -163,24 +224,21 @@ public class PublicItemController {
                 .stream()
                 .toList();
 
-        // Filter out archived items for public
         candidateItems = candidateItems.stream()
                 .filter(i -> !Item.STATE_RETURNED.equals(i.getState())
                         && !Item.STATE_TRANSFERRED_TO_COMUNE.equals(i.getState()))
                 .toList();
 
-        // Security-friendly log: no docNumber, no digits
         log.info("ID-MATCH attempt by user={} docType={} birthdateProvided={} matches={}",
-                user,
-                req.docType(),
-                (birthdate != null),
-                candidateItems.size()
-        );
+                user, req.docType(), (birthdate != null), candidateItems.size());
 
-        return candidateItems.stream().map(PublicItemDto::from).toList();
+        return candidateItems.stream().map(PublicItemDto::fromMember).toList();
     }
 
-    // ==== 6) Public "start claim for this item" (requires login) ====
+    // =========================================================
+    // 6) Start claim (LOGIN REQUIRED)
+    // POST /public/items/{id}/claim
+    // =========================================================
     @PostMapping("/{id}/claim")
     public ClaimDto startClaim(
             @PathVariable("id") UUID itemId,
@@ -194,13 +252,11 @@ public class PublicItemController {
         Item item = items.findById(itemId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
 
-        // Do not allow claims on archived items
         if (Item.STATE_RETURNED.equals(item.getState()) ||
                 Item.STATE_TRANSFERRED_TO_COMUNE.equals(item.getState())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "item is not claimable anymore");
         }
 
-        // Basic validation
         if (req == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request body is required");
         }
@@ -211,26 +267,25 @@ public class PublicItemController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "passengerEmail is required");
         }
 
-        // Create claim
+        String normalizedEmail = req.passengerEmail().trim().toLowerCase();
+
         Claim c = new Claim();
         c.setId(UUID.randomUUID());
         c.setItem(item);
         c.setPassengerName(req.passengerName());
-        c.setPassengerEmail(req.passengerEmail());
+        c.setPassengerEmail(normalizedEmail);
         c.setPassengerPhone(req.passengerPhone());
         c.setNarrative(req.narrative());
         c.setStatus("new");
         c.setSubmittedAt(OffsetDateTime.now());
         c.setUpdatedAt(OffsetDateTime.now());
 
-        // NEW: link to public user + generate reference code
         c.setPublicUserId(user);
-        String refCode = c.getId().toString().substring(0, 8).toUpperCase(); // e.g. "A1B2C3D4"
+        String refCode = c.getId().toString().substring(0, 8).toUpperCase();
         c.setPublicReferenceCode(refCode);
 
         Claim saved = claims.save(c);
 
-        // Audit as "public-created" claim
         audits.log(
                 "CLAIM_CREATED_PUBLIC",
                 "CLAIM",
@@ -245,8 +300,6 @@ public class PublicItemController {
         return ClaimDto.from(saved);
     }
 
-
-    // ==== 7) Local SHA helper (same as ItemDocumentController) ====
     private static String sha256Hex(String input) {
         try {
             var md = java.security.MessageDigest.getInstance("SHA-256");

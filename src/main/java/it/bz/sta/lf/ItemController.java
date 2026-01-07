@@ -1,8 +1,10 @@
 package it.bz.sta.lf;
 
+import it.bz.sta.lf.catalog.CategoryCatalog;
 import it.bz.sta.lf.dto.ItemDto;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -17,26 +19,37 @@ public class ItemController {
     private final ItemRepository repo;
     private final LocationRepository locations;
     private final AuditService audits;
+    private final CategoryCatalog categoryCatalog;
 
-    public ItemController(ItemRepository repo, LocationRepository locations, AuditService audits) {
+    public ItemController(
+            ItemRepository repo,
+            LocationRepository locations,
+            AuditService audits,
+            CategoryCatalog categoryCatalog
+    ) {
         this.repo = repo;
         this.locations = locations;
         this.audits = audits;
+        this.categoryCatalog = categoryCatalog;
     }
 
     // small request DTOs
-    public record CreateItem(String description) {}
+    public record CreateItem(
+            String description,
+            String categoryMain, // e.g. "KEYS"
+            String categorySub   // e.g. "VEHICLE_KEY_SINGLE"
+    ) {}
+
     public record StoreReq(UUID locationId) {}
+
+    public record TransferToComuneReq(UUID comuneTransferId) {}
 
     // ---------- Basic list (internal, login required) ----------
     @GetMapping
     public List<ItemDto> all(
             @RequestHeader(value = "X-User", required = false) String user
     ) {
-        if (user == null || user.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to list items");
-        }
-
+        requireUser(user, "login required to list items");
         return repo.findAll().stream().map(ItemDto::from).toList();
     }
 
@@ -46,9 +59,7 @@ public class ItemController {
             @PathVariable("id") UUID id,
             @RequestHeader(value = "X-User", required = false) String user
     ) {
-        if (user == null || user.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to view items");
-        }
+        requireUser(user, "login required to view items");
 
         return repo.findById(id)
                 .map(item -> ResponseEntity.ok(ItemDto.from(item)))
@@ -61,16 +72,49 @@ public class ItemController {
             @RequestBody CreateItem req,
             @RequestHeader(value = "X-User", required = false) String user
     ) {
-        if (user == null || user.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to create items");
-        }
+        requireUser(user, "login required to create items");
 
         if (req == null || req.description() == null || req.description().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "description is required");
         }
 
+        // Category rules:
+        // - none provided => default MISC/OTHER (old clients still work)
+        // - both provided => must exist in catalog
+        // - only one provided => 400
+        boolean mainBlank = (req.categoryMain() == null || req.categoryMain().isBlank());
+        boolean subBlank  = (req.categorySub()  == null || req.categorySub().isBlank());
+
+        String main;
+        String sub;
+
+        if (mainBlank && subBlank) {
+            main = "MISC";
+            sub = "OTHER";
+        } else if (mainBlank || subBlank) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "categoryMain and categorySub must be provided together"
+            );
+        } else {
+            // Canonicalize (trim, uppercase, alias mapping)
+            CategoryCatalog.Canonical canon = categoryCatalog.canonicalize(req.categoryMain(), req.categorySub());
+            main = canon.main();
+            sub  = canon.sub();
+
+            // Validate against catalog
+            if (!categoryCatalog.isValidMain(main)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid categoryMain: " + main);
+            }
+            if (!categoryCatalog.isValidSub(main, sub)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid categorySub for " + main + ": " + sub);
+            }
+        }
+
         Item item = new Item(UUID.randomUUID(), req.description(), OffsetDateTime.now());
-        // state defaults to REPORTED in entity
+        item.setCategoryMain(main);
+        item.setCategorySub(sub);
+
         Item saved = repo.save(item);
 
         audits.log(
@@ -78,7 +122,11 @@ public class ItemController {
                 "ITEM",
                 saved.getId(),
                 user,
-                "{\"description\":\"" + saved.getDescription() + "\"}"
+                "{"
+                        + "\"description\":\"" + saved.getDescription() + "\","
+                        + "\"categoryMain\":\"" + saved.getCategoryMain() + "\","
+                        + "\"categorySub\":\"" + saved.getCategorySub() + "\""
+                        + "}"
         );
 
         return ResponseEntity.ok(ItemDto.from(saved));
@@ -86,14 +134,13 @@ public class ItemController {
 
     // ---------- Store → SHELVED (internal, login required) ----------
     @PostMapping("/{id}/store")
+    @Transactional
     public ResponseEntity<ItemDto> store(
             @PathVariable("id") UUID id,
             @RequestBody StoreReq req,
             @RequestHeader(value = "X-User", required = false) String user
     ) {
-        if (user == null || user.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to store items");
-        }
+        requireUser(user, "login required to store items");
 
         if (req == null || req.locationId() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "locationId is required");
@@ -126,21 +173,22 @@ public class ItemController {
 
     // ---------- Mark READY_FOR_TRANSFER (internal, login required) ----------
     @PostMapping("/{id}/ready-for-transfer")
+    @Transactional
     public ResponseEntity<ItemDto> readyForTransfer(
             @PathVariable("id") UUID id,
             @RequestHeader(value = "X-User", required = false) String user
     ) {
-        if (user == null || user.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to mark items READY_FOR_TRANSFER");
-        }
+        requireUser(user, "login required to mark items READY_FOR_TRANSFER");
 
         Item it = repo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
 
         // Only allow from SHELVED or ON_HOLD
         if (!Item.STATE_SHELVED.equals(it.getState()) && !Item.STATE_ON_HOLD.equals(it.getState())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "item must be SHELVED or ON_HOLD to mark READY_FOR_TRANSFER");
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "item must be SHELVED or ON_HOLD to mark READY_FOR_TRANSFER"
+            );
         }
 
         String before = "{\"state\":\"" + it.getState() + "\"}";
@@ -158,6 +206,51 @@ public class ItemController {
         return ResponseEntity.ok(ItemDto.from(it));
     }
 
+    // ---------- Transfer to Comune (internal, login required) ----------
+    @PostMapping("/{id}/transfer-to-comune")
+    @Transactional
+    public ResponseEntity<ItemDto> transferToComune(
+            @PathVariable("id") UUID id,
+            @RequestBody(required = false) TransferToComuneReq req,
+            @RequestHeader(value = "X-User", required = false) String user
+    ) {
+        requireUser(user, "login required to transfer items to comune");
+
+        Item it = repo.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
+
+        if (!Item.STATE_READY_FOR_TRANSFER.equals(it.getState())) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "item must be READY_FOR_TRANSFER to transfer to comune"
+            );
+        }
+
+        String before = "{\"state\":\"" + it.getState() + "\"}";
+        it.setState(Item.STATE_TRANSFERRED_TO_COMUNE);
+        String after = "{\"state\":\"" + it.getState() + "\"}";
+
+        String comuneTransferId = (req != null && req.comuneTransferId() != null)
+                ? req.comuneTransferId().toString()
+                : null;
+
+        audits.log(
+                "ITEM_TRANSFERRED_TO_COMUNE",
+                "ITEM",
+                it.getId(),
+                user,
+                "{"
+                        + "\"before\":" + before + ","
+                        + "\"after\":" + after + ","
+                        + (comuneTransferId == null
+                        ? "\"comuneTransferId\":null"
+                        : "\"comuneTransferId\":\"" + comuneTransferId + "\"")
+                        + "}"
+        );
+
+        return ResponseEntity.ok(ItemDto.from(it));
+    }
+
     // ---------- General search (internal, login required) ----------
     @GetMapping("/search")
     public List<ItemDto> search(
@@ -168,9 +261,7 @@ public class ItemController {
             @RequestParam(name = "depotId", required = false) UUID depotId,
             @RequestHeader(value = "X-User", required = false) String user
     ) {
-        if (user == null || user.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to search items");
-        }
+        requireUser(user, "login required to search items");
 
         OffsetDateTime fromTs = null, toTs = null;
         try { if (from != null && !from.isBlank()) fromTs = OffsetDateTime.parse(from); } catch (Exception ignored) {}
@@ -215,9 +306,7 @@ public class ItemController {
             @RequestParam(name = "depotId", required = false) UUID depotId,
             @RequestHeader(value = "X-User", required = false) String user
     ) {
-        if (user == null || user.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to search archive");
-        }
+        requireUser(user, "login required to search archive");
 
         OffsetDateTime fromTs = null, toTs = null;
         try { if (from != null && !from.isBlank()) fromTs = OffsetDateTime.parse(from); } catch (Exception ignored) {}
@@ -251,5 +340,12 @@ public class ItemController {
         }
 
         return items.stream().map(ItemDto::from).toList();
+    }
+
+    // ---------- helpers ----------
+    private static void requireUser(String user, String msg) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, msg);
+        }
     }
 }

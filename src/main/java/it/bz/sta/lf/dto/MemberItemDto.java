@@ -5,7 +5,13 @@ import it.bz.sta.lf.Item;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
-public record PublicItemDto(
+/**
+ * Logged-in public user view.
+ * - Still no grid location ID
+ * - Depot name is allowed
+ * - Photos are fetched via /items/{id}/photos (now protected)
+ */
+public record MemberItemDto(
         UUID id,
         String description,
         OffsetDateTime foundAt,
@@ -13,23 +19,12 @@ public record PublicItemDto(
         String categoryMain,
         String categorySub
 ) {
-    public static PublicItemDto fromAnonymous(Item it) {
-        return new PublicItemDto(
-                it.getId(),
-                it.getDescription(),
-                it.getFoundAt(),
-                null, // IMPORTANT: hide depotName for anonymous
-                it.getCategoryMain(),
-                it.getCategorySub()
-        );
-    }
-
-    public static PublicItemDto fromMember(Item it) {
+    public static MemberItemDto from(Item it) {
         String depotName = null;
         if (it.getCurrentLocation() != null && it.getCurrentLocation().getDepot() != null) {
             depotName = it.getCurrentLocation().getDepot().getName();
         }
-        return new PublicItemDto(
+        return new MemberItemDto(
                 it.getId(),
                 it.getDescription(),
                 it.getFoundAt(),

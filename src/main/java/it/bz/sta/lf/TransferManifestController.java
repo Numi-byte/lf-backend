@@ -126,7 +126,8 @@ public class TransferManifestController {
             line.setShortCode(shortCode);
 
             // category: we don't have a dedicated field yet, so leave null for now
-            line.setCategory(null);
+            line.setCategoryMain(it.getCategoryMain());
+            line.setCategorySub(it.getCategorySub());
 
             line.setFoundAt(it.getFoundAt());
 
