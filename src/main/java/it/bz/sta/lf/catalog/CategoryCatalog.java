@@ -69,7 +69,7 @@ public class CategoryCatalog {
             return false;
         }
 
-        return controller.categories().stream()
+        return controller.rawCategories().stream()
                 .anyMatch(category -> main.equals(norm(category.code())));
     }
 
@@ -78,7 +78,7 @@ public class CategoryCatalog {
         String sub = norm(subRaw);
         if (main == null || sub == null) return false;
 
-        return controller.categories().stream()
+        return controller.rawCategories().stream()
                 .filter(category -> main.equals(norm(category.code())))
                 .flatMap(category -> category.subcategories().stream())
                 .anyMatch(subCategory -> sub.equals(norm(subCategory.code())));
