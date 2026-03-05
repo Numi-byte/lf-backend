@@ -1,46 +1,25 @@
 package it.bz.sta.lf.catalog;
 
-import jakarta.annotation.PostConstruct;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
-import java.util.Locale;
 
 @Component
 public class CategoryCatalog {
 
     private final CategoryCatalogController controller;
 
-    // main -> allowed sub codes
-    private Map<String, Set<String>> allowedSubsByMain = Map.of();
-
     // main -> (aliasSub -> canonicalSub)
-    private Map<String, Map<String, String>> subAliasesByMain = Map.of();
+    private final Map<String, Map<String, String>> subAliasesByMain;
 
     public record Canonical(String main, String sub) {}
 
     public CategoryCatalog(CategoryCatalogController controller) {
         this.controller = controller;
+        this.subAliasesByMain = buildAliases();
     }
 
-    @PostConstruct
-    void init() {
-        // Build allow-list from your existing CategoryCatalogController (single source of truth)
-        Map<String, Set<String>> allowed = new HashMap<>();
-        for (CategoryCatalogController.Category c : controller.categories()) {
-            String main = norm(c.code());
-            Set<String> subs = new HashSet<>();
-            if (c.subcategories() != null) {
-                for (CategoryCatalogController.SubCategory sc : c.subcategories()) {
-                    subs.add(norm(sc.code()));
-                }
-            }
-            allowed.put(main, Collections.unmodifiableSet(subs));
-        }
-        allowedSubsByMain = Collections.unmodifiableMap(allowed);
-
-        // Aliases for old client codes / human variations
-        // IMPORTANT: Your KEYS catalog uses VEHICLE_KEY_SINGLE, not SINGLE_VEHICLE_KEY
+    private static Map<String, Map<String, String>> buildAliases() {
         Map<String, Map<String, String>> aliases = new HashMap<>();
 
         aliases.put("KEYS", Map.of(
@@ -64,7 +43,7 @@ public class CategoryCatalog {
                 "EVENT_TICKET", "EVENT_TICKET_VOUCHER"
         ));
 
-        subAliasesByMain = Collections.unmodifiableMap(aliases);
+        return Collections.unmodifiableMap(aliases);
     }
 
     private static String norm(String s) {
@@ -86,7 +65,12 @@ public class CategoryCatalog {
 
     public boolean isValidMain(String mainRaw) {
         String main = norm(mainRaw);
-        return main != null && allowedSubsByMain.containsKey(main);
+        if (main == null) {
+            return false;
+        }
+
+        return controller.categories().stream()
+                .anyMatch(category -> main.equals(norm(category.code())));
     }
 
     public boolean isValidSub(String mainRaw, String subRaw) {
@@ -94,7 +78,9 @@ public class CategoryCatalog {
         String sub = norm(subRaw);
         if (main == null || sub == null) return false;
 
-        Set<String> allowed = allowedSubsByMain.get(main);
-        return allowed != null && allowed.contains(sub);
+        return controller.categories().stream()
+                .filter(category -> main.equals(norm(category.code())))
+                .flatMap(category -> category.subcategories().stream())
+                .anyMatch(subCategory -> sub.equals(norm(subCategory.code())));
     }
 }

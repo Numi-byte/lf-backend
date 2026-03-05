@@ -9,11 +9,33 @@ import java.util.Map;
 @RequestMapping("/public/catalog")
 public class CategoryCatalogController {
 
+    private final CatalogVisibilityService visibilityService;
+
+    public CategoryCatalogController(CatalogVisibilityService visibilityService) {
+        this.visibilityService = visibilityService;
+    }
+
     public record SubCategory(String code, Map<String, String> label) {}
     public record Category(String code, Map<String, String> label, String iconKey, List<SubCategory> subcategories) {}
 
     @GetMapping("/categories")
     public List<Category> categories() {
+        CatalogVisibilityService.VisibilityState visibilityState = visibilityService.getVisibilityState();
+
+        return rawCategories().stream()
+                .filter(category -> !visibilityState.isMainHidden(category.code()))
+                .map(category -> new Category(
+                        category.code(),
+                        category.label(),
+                        category.iconKey(),
+                        category.subcategories().stream()
+                                .filter(subCategory -> !visibilityState.isSubHidden(category.code(), subCategory.code()))
+                                .toList()
+                ))
+                .toList();
+    }
+
+    public List<Category> rawCategories() {
         return List.of(
                 category_ID_DOCS(),
                 category_VEHICLES(),
