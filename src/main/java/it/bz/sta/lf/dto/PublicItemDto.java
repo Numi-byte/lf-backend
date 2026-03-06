@@ -11,7 +11,10 @@ public record PublicItemDto(
         OffsetDateTime foundAt,
         String depotName,
         String categoryMain,
-        String categorySub
+        String categorySub,
+        String transportType,
+        String transportLine,
+        String transportLineDe
 ) {
     public static PublicItemDto fromAnonymous(Item it) {
         return new PublicItemDto(
@@ -20,7 +23,10 @@ public record PublicItemDto(
                 it.getFoundAt(),
                 null, // IMPORTANT: hide depotName for anonymous
                 it.getCategoryMain(),
-                it.getCategorySub()
+                it.getCategorySub(),
+                it.getTransportType(),
+                it.getTransportLine(),
+                it.getTransportLineDe()
         );
     }
 
@@ -35,7 +41,10 @@ public record PublicItemDto(
                 it.getFoundAt(),
                 depotName,
                 it.getCategoryMain(),
-                it.getCategorySub()
+                it.getCategorySub(),
+                it.getTransportType(),
+                it.getTransportLine(),
+                it.getTransportLineDe()
         );
     }
 }

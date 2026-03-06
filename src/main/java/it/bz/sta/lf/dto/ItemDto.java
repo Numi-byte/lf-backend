@@ -11,7 +11,10 @@ public record ItemDto(
         String state,
         UUID currentLocationId,
         String categoryMain,
-        String categorySub
+        String categorySub,
+        String transportType,
+        String transportLine,
+        String transportLineDe
 ) {
     public static ItemDto from(Item it) {
         return new ItemDto(
@@ -21,7 +24,10 @@ public record ItemDto(
                 it.getState(),
                 it.getCurrentLocation() != null ? it.getCurrentLocation().getId() : null,
                 it.getCategoryMain(),
-                it.getCategorySub()
+                it.getCategorySub(),
+                it.getTransportType(),
+                it.getTransportLine(),
+                it.getTransportLineDe()
         );
     }
 }

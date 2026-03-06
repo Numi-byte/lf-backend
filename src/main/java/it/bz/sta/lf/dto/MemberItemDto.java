@@ -17,7 +17,10 @@ public record MemberItemDto(
         OffsetDateTime foundAt,
         String depotName,
         String categoryMain,
-        String categorySub
+        String categorySub,
+        String transportType,
+        String transportLine,
+        String transportLineDe
 ) {
     public static MemberItemDto from(Item it) {
         String depotName = null;
@@ -30,7 +33,10 @@ public record MemberItemDto(
                 it.getFoundAt(),
                 depotName,
                 it.getCategoryMain(),
-                it.getCategorySub()
+                it.getCategorySub(),
+                it.getTransportType(),
+                it.getTransportLine(),
+                it.getTransportLineDe()
         );
     }
 }

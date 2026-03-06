@@ -37,7 +37,19 @@ public class ItemController {
     public record CreateItem(
             String description,
             String categoryMain, // e.g. "KEYS"
-            String categorySub   // e.g. "VEHICLE_KEY_SINGLE"
+            String categorySub,   // e.g. "VEHICLE_KEY_SINGLE"
+            String transportType,
+            String transportLine,
+            String transportLineDe
+    ) {}
+
+    public record UpdateItem(
+            String description,
+            String categoryMain,
+            String categorySub,
+            String transportType,
+            String transportLine,
+            String transportLineDe
     ) {}
 
     public record StoreReq(UUID locationId) {}
@@ -114,6 +126,9 @@ public class ItemController {
         Item item = new Item(UUID.randomUUID(), req.description(), OffsetDateTime.now());
         item.setCategoryMain(main);
         item.setCategorySub(sub);
+        item.setTransportType(blankToNull(req.transportType()));
+        item.setTransportLine(blankToNull(req.transportLine()));
+        item.setTransportLineDe(resolveGermanLine(req.transportLine(), req.transportLineDe()));
 
         Item saved = repo.save(item);
 
@@ -125,11 +140,85 @@ public class ItemController {
                 "{"
                         + "\"description\":\"" + saved.getDescription() + "\","
                         + "\"categoryMain\":\"" + saved.getCategoryMain() + "\","
-                        + "\"categorySub\":\"" + saved.getCategorySub() + "\""
+                        + "\"categorySub\":\"" + saved.getCategorySub() + "\","
+                        + "\"transportType\":" + jsonNullable(saved.getTransportType()) + ","
+                        + "\"transportLine\":" + jsonNullable(saved.getTransportLine()) + ","
+                        + "\"transportLineDe\":" + jsonNullable(saved.getTransportLineDe())
                         + "}"
         );
 
         return ResponseEntity.ok(ItemDto.from(saved));
+    }
+
+    @PatchMapping("/{id}")
+    @Transactional
+    public ResponseEntity<ItemDto> update(
+            @PathVariable("id") UUID id,
+            @RequestBody UpdateItem req,
+            @RequestHeader(value = "X-User", required = false) String user
+    ) {
+        requireUser(user, "login required to update items");
+        if (req == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request body is required");
+        }
+
+        Item it = repo.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
+
+        if (req.description() != null && !req.description().isBlank()) {
+            it.setDescription(req.description().trim());
+        }
+
+        boolean mainProvided = req.categoryMain() != null;
+        boolean subProvided = req.categorySub() != null;
+        if (mainProvided || subProvided) {
+            if (!mainProvided || !subProvided || req.categoryMain().isBlank() || req.categorySub().isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "categoryMain and categorySub must be provided together");
+            }
+
+            CategoryCatalog.Canonical canon = categoryCatalog.canonicalize(req.categoryMain(), req.categorySub());
+            String main = canon.main();
+            String sub = canon.sub();
+
+            if (!categoryCatalog.isValidMain(main)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid categoryMain: " + main);
+            }
+            if (!categoryCatalog.isValidSub(main, sub)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid categorySub for " + main + ": " + sub);
+            }
+
+            it.setCategoryMain(main);
+            it.setCategorySub(sub);
+        }
+
+        if (req.transportType() != null) it.setTransportType(blankToNull(req.transportType()));
+        if (req.transportLine() != null) it.setTransportLine(blankToNull(req.transportLine()));
+        if (req.transportLineDe() != null || req.transportLine() != null) {
+            it.setTransportLineDe(resolveGermanLine(req.transportLine() != null ? req.transportLine() : it.getTransportLine(), req.transportLineDe()));
+        }
+
+        return ResponseEntity.ok(ItemDto.from(it));
+    }
+
+    private static String blankToNull(String value) {
+        return (value == null || value.isBlank()) ? null : value.trim();
+    }
+
+    private static String resolveGermanLine(String line, String lineDe) {
+        if (lineDe != null && !lineDe.isBlank()) {
+            return lineDe.trim();
+        }
+
+        if (line == null || line.isBlank()) {
+            return null;
+        }
+
+        String[] split = line.split("/", 2);
+        return split.length > 1 ? split[0].trim() : null;
+    }
+
+    private static String jsonNullable(String value) {
+        return value == null ? "null" : "\"" + value.replace("\"", "\\\"") + "\"";
     }
 
     // ---------- Store → SHELVED (internal, login required) ----------

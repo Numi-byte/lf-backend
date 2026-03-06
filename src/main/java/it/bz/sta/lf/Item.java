@@ -34,6 +34,15 @@ public class Item {
     @Column(name = "category_sub", nullable = false)
     private String categorySub = "OTHER";
 
+    @Column(name =  "transport_type")
+    private String transportType;
+
+    @Column(name =  "transport_line")
+    private String transportLine;
+
+    @Column(name =  "transport_line_de")
+    private String transportLineDe;
+
     @ManyToOne
     @JoinColumn(name = "current_location_id")
     private Location currentLocation;
@@ -67,5 +76,14 @@ public class Item {
 
     public String getCategorySub() { return categorySub; }
     public void setCategorySub(String categorySub) { this.categorySub = categorySub; }
+
+    public String getTransportType() { return transportType; }
+    public void setTransportType(String transportType) { this.transportType = transportType; }
+
+    public String getTransportLine() { return transportLine; }
+    public void setTransportLine(String transportLine) { this.transportLine = transportLine; }
+
+    public String getTransportLineDe() { return transportLineDe; }
+    public void setTransportLineDe(String transportLineDe) { this.transportLineDe = transportLineDe; }
 
 }
