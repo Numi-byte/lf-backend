@@ -23,17 +23,20 @@ public class ClaimController {
     private final ItemRepository items;
     private final ItemDocumentRepository itemDocuments;
     private final AuditService audits;
+    private final CompanyAccessService companyAccess;
 
     public ClaimController(
             ClaimRepository claims,
             ItemRepository items,
             ItemDocumentRepository itemDocuments,
-            AuditService audits
+            AuditService audits,
+            CompanyAccessService companyAccess
     ) {
         this.claims = claims;
         this.items = items;
         this.itemDocuments = itemDocuments;
         this.audits = audits;
+        this.companyAccess = companyAccess;
     }
 
     // ----- Request DTOs -----
@@ -43,8 +46,8 @@ public class ClaimController {
             String passengerEmail,
             String passengerPhone,
             String narrative,
-            String docNumber,      // optional: ID / document number provided by claimant
-            String docBirthdate    // optional: YYYY-MM-DD
+            String docNumber,
+            String docBirthdate
     ) {}
 
     public record ApproveReq(
@@ -52,18 +55,25 @@ public class ClaimController {
             Integer feeCents
     ) {}
 
-    // ----- List & get (login required) -----
     @GetMapping
     public List<ClaimDto> list(
             @RequestParam(name = "itemId", required = false) UUID itemId,
             @RequestHeader(value = "X-User", required = false) String user
     ) {
-        if (user == null || user.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to list claims");
+        requireUser(user, "login required to list claims");
+        String company = companyAccess.requireCompany(user);
+
+        if (itemId != null) {
+            Item item = items.findById(itemId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
+            companyAccess.ensureItemAccess(company, item, "item not found");
         }
 
         List<Claim> src = (itemId == null) ? claims.findAll() : claims.findByItemId(itemId);
-        return src.stream().map(ClaimDto::from).toList();
+        return src.stream()
+                .filter(claim -> claim.getItem() != null && companyAccess.canAccessItem(company, claim.getItem()))
+                .map(ClaimDto::from)
+                .toList();
     }
 
     @GetMapping("/{id}")
@@ -71,29 +81,28 @@ public class ClaimController {
             @PathVariable("id") UUID id,
             @RequestHeader(value = "X-User", required = false) String user
     ) {
-        if (user == null || user.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to view claims");
-        }
+        requireUser(user, "login required to view claims");
+        String company = companyAccess.requireCompany(user);
 
         return claims.findById(id)
-                .map(c -> ResponseEntity.ok(ClaimDto.from(c)))
+                .map(claim -> {
+                    companyAccess.ensureClaimAccess(company, claim, "claim not found");
+                    return ResponseEntity.ok(ClaimDto.from(claim));
+                })
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    // ----- Create claim (login required, with optional ID-match logic) -----
     @PostMapping
     public ResponseEntity<ClaimDto> create(
             @RequestBody CreateClaim req,
             @RequestHeader(value = "X-User", required = false) String user
     ) {
-        if (user == null || user.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to create claims");
-        }
+        requireUser(user, "login required to create claims");
+        String company = companyAccess.requireCompany(user);
 
         if (req == null || req.itemId() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "itemId is required");
         }
-
         if (req.passengerName() == null || req.passengerName().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "passengerName is required");
         }
@@ -105,46 +114,33 @@ public class ClaimController {
 
         Item item = items.findById(req.itemId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
+        companyAccess.ensureItemAccess(company, item, "item not found");
 
-        Claim c = new Claim();
-        c.setId(UUID.randomUUID());
-        c.setItem(item);
+        Claim claim = new Claim();
+        claim.setId(UUID.randomUUID());
+        claim.setItem(item);
+        claim.setPassengerName(req.passengerName());
+        claim.setPassengerEmail(normalizedEmail);
+        claim.setPassengerPhone(req.passengerPhone());
+        claim.setNarrative(req.narrative());
+        claim.setStatus("new");
+        claim.setSubmittedAt(OffsetDateTime.now());
+        claim.setUpdatedAt(OffsetDateTime.now());
 
-        c.setPassengerName(req.passengerName());
-        c.setPassengerEmail(normalizedEmail);
-        c.setPassengerPhone(req.passengerPhone());
-        c.setNarrative(req.narrative());
+        String refCode = claim.getId().toString().substring(0, 8).toUpperCase();
+        claim.setPublicReferenceCode(refCode);
 
-        c.setStatus("new");
-        c.setSubmittedAt(OffsetDateTime.now());
-        c.setUpdatedAt(OffsetDateTime.now());
-
-        // Always set a reference code (useful for CS even for internal claims)
-        String refCode = c.getId().toString().substring(0, 8).toUpperCase();
-        c.setPublicReferenceCode(refCode);
-
-        // NOTE: We do NOT set publicUserId here, because this is an internal endpoint.
-        // The public portal endpoint sets publicUserId explicitly.
-
-        // --- Wallet / ID-card match logic (optional) ---
         String docMatchStatus = "NOT_PROVIDED";
-
         if (req.docNumber() != null && !req.docNumber().isBlank()) {
             LocalDate birthdate = null;
-
             if (req.docBirthdate() != null && !req.docBirthdate().isBlank()) {
                 try {
                     birthdate = LocalDate.parse(req.docBirthdate());
                 } catch (DateTimeParseException e) {
-                    throw new ResponseStatusException(
-                            HttpStatus.BAD_REQUEST,
-                            "invalid docBirthdate, expected YYYY-MM-DD"
-                    );
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid docBirthdate, expected YYYY-MM-DD");
                 }
             }
 
-            // Normalize same as ItemDocumentController:
-            // digits(docNumber) + "|" + birthdate
             String digits = req.docNumber().replaceAll("\\D", "");
             String tokenBase = digits + "|" + (birthdate != null ? birthdate.toString() : "");
             String claimHash = sha256Hex(tokenBase);
@@ -153,13 +149,12 @@ public class ClaimController {
             if (docsForItem.isEmpty()) {
                 docMatchStatus = "NO_DOCUMENT_ON_ITEM";
             } else {
-                boolean match = docsForItem.stream()
-                        .anyMatch(d -> claimHash.equals(d.getDocMatchHash()));
+                boolean match = docsForItem.stream().anyMatch(d -> claimHash.equals(d.getDocMatchHash()));
                 docMatchStatus = match ? "FULL_MATCH" : "NO_MATCH";
             }
         }
 
-        Claim saved = claims.save(c);
+        Claim saved = claims.save(claim);
 
         // Store result only in audit details (no need to persist docNumber)
         audits.log(
@@ -169,6 +164,7 @@ public class ClaimController {
                 user,
                 "{"
                         + "\"itemId\":\"" + item.getId() + "\","
+                        + "\"company\":\"" + companyAccess.itemCompany(item) + "\","
                         + "\"publicRef\":\"" + refCode + "\","
                         + "\"docMatchStatus\":\"" + docMatchStatus + "\""
                         + "}"
@@ -177,7 +173,6 @@ public class ClaimController {
         return ResponseEntity.status(201).body(ClaimDto.from(saved));
     }
 
-    // ----- Approve claim → put item ON_HOLD (login required) -----
     @PostMapping("/{id}/approve")
     @Transactional
     public ResponseEntity<ClaimDto> approve(
@@ -185,24 +180,23 @@ public class ClaimController {
             @RequestBody ApproveReq req,
             @RequestHeader(value = "X-User", required = false) String user
     ) {
-        if (user == null || user.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to approve claims");
-        }
+        requireUser(user, "login required to approve claims");
+        String company = companyAccess.requireCompany(user);
 
-        Claim c = claims.findById(id)
+        Claim claim = claims.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "claim not found"));
+        companyAccess.ensureClaimAccess(company, claim, "claim not found");
 
         if (req == null || req.method() == null || req.method().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "method is required");
         }
 
-        c.setStatus("approved");
-        c.setMethod(req.method());
-        c.setFeeCents(req.feeCents() == null ? 0 : req.feeCents());
-        c.setUpdatedAt(OffsetDateTime.now());
+        claim.setStatus("approved");
+        claim.setMethod(req.method());
+        claim.setFeeCents(req.feeCents() == null ? 0 : req.feeCents());
+        claim.setUpdatedAt(OffsetDateTime.now());
 
-        // Link to item → set ON_HOLD
-        Item item = c.getItem();
+        Item item = claim.getItem();
         if (item != null) {
             String before = "{\"state\":\"" + item.getState() + "\"}";
             item.setState(Item.STATE_ON_HOLD);
@@ -211,37 +205,42 @@ public class ClaimController {
             audits.log(
                     "CLAIM_APPROVED",
                     "CLAIM",
-                    c.getId(),
+                    claim.getId(),
                     user,
-                    "{\"itemId\":\"" + item.getId() + "\",\"before\":" + before + ",\"after\":" + after + "}"
+                    "{\"itemId\":\"" + item.getId() + "\",\"company\":\"" + companyAccess.itemCompany(item) + "\",\"before\":" + before + ",\"after\":" + after + "}"
             );
         } else {
-            audits.log("CLAIM_APPROVED", "CLAIM", c.getId(), user, null);
+            audits.log("CLAIM_APPROVED", "CLAIM", claim.getId(), user, null);
         }
 
-        return ResponseEntity.ok(ClaimDto.from(c));
+        return ResponseEntity.ok(ClaimDto.from(claim));
     }
 
-    // ----- Close claim (manual, login required) -----
     @PostMapping("/{id}/close")
     @Transactional
     public ResponseEntity<ClaimDto> close(
             @PathVariable("id") UUID id,
             @RequestHeader(value = "X-User", required = false) String user
     ) {
-        if (user == null || user.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to close claims");
-        }
+        requireUser(user, "login required to close claims");
+        String company = companyAccess.requireCompany(user);
 
-        Claim c = claims.findById(id)
+        Claim claim = claims.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "claim not found"));
+        companyAccess.ensureClaimAccess(company, claim, "claim not found");
 
-        c.setStatus("closed");
-        c.setUpdatedAt(OffsetDateTime.now());
+        claim.setStatus("closed");
+        claim.setUpdatedAt(OffsetDateTime.now());
 
-        audits.log("CLAIM_CLOSED", "CLAIM", c.getId(), user, null);
+        audits.log("CLAIM_CLOSED", "CLAIM", claim.getId(), user, null);
 
-        return ResponseEntity.ok(ClaimDto.from(c));
+        return ResponseEntity.ok(ClaimDto.from(claim));
+    }
+
+    private static void requireUser(String user, String message) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, message);
+        }
     }
 
     private static String sha256Hex(String input) {

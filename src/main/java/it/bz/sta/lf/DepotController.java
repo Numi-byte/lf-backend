@@ -14,9 +14,11 @@ import java.util.UUID;
 public class DepotController {
 
     private final DepotRepository depots;
+    private final CompanyAccessService companyAccess;
 
-    public DepotController(DepotRepository depots) {
+    public DepotController(DepotRepository depots, CompanyAccessService companyAccess) {
         this.depots = depots;
+        this.companyAccess = companyAccess;
     }
 
     record CreateDepot(String name) {}
@@ -25,11 +27,11 @@ public class DepotController {
     public List<DepotDto> list(
             @RequestHeader(value = "X-User", required = false) String user
     ) {
-        if (user == null || user.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to list depots");
-        }
+        requireUser(user, "login required to list depots");
+        String company = companyAccess.requireCompany(user);
 
         return depots.findAll().stream()
+                .filter(depot -> companyAccess.canAccessDepot(company, depot))
                 .map(DepotDto::from)
                 .toList();
     }
@@ -39,15 +41,23 @@ public class DepotController {
             @RequestBody CreateDepot req,
             @RequestHeader(value = "X-User", required = false) String user
     ) {
-        if (user == null || user.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to create depots");
-        }
+        requireUser(user, "login required to create depots");
 
         if (req == null || req.name() == null || req.name().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "name is required");
         }
 
-        Depot d = new Depot(UUID.randomUUID(), req.name());
-        return ResponseEntity.status(201).body(DepotDto.from(depots.save(d)));
+        Depot depot = new Depot();
+        depot.setId(UUID.randomUUID());
+        depot.setName(req.name().trim());
+        companyAccess.assignDepotCompany(depot, user);
+
+        return ResponseEntity.status(201).body(DepotDto.from(depots.save(depot)));
+    }
+
+    private static void requireUser(String user, String message) {
+        if (user == null || user.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, message);
+        }
     }
 }

@@ -21,10 +21,11 @@ public class ItemPhotoController {
     private final ItemRepository items;
     private final ItemPhotoRepository photos;
     private final S3StorageService storage;
+    private final CompanyAccessService companyAccess;
 
 
-    public ItemPhotoController(ItemRepository items, ItemPhotoRepository photos, S3StorageService storage){
-        this.items=items; this.photos=photos; this.storage=storage;
+    public ItemPhotoController(ItemRepository items, ItemPhotoRepository photos, S3StorageService storage, CompanyAccessService companyAccess){
+        this.items=items; this.photos=photos; this.storage=storage; this.companyAccess=new CompanyAccessService();
     }
 
 
@@ -38,9 +39,11 @@ public class ItemPhotoController {
         if (user == null || user.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to upload item photos");
         }
+        String company = companyAccess.requireCompany(user);
 
         Item item = items.findById(itemId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
+        companyAccess.ensureItemAccess(company, item, "item not found");
 
         if (file == null || file.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "file is required");
@@ -70,9 +73,11 @@ public class ItemPhotoController {
         if (user == null || user.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to view item photos");
         }
+        String company = companyAccess.requireCompany(user);
 
-        items.findById(itemId)
+        Item item = items.findById(itemId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
+        companyAccess.ensureItemAccess(company, item, "item not found");
 
         List<ItemPhoto> list = photos.findByItemId(itemId);
         List<ItemPhotoDto> out = new ArrayList<>();
@@ -93,9 +98,11 @@ public class ItemPhotoController {
         if (user == null || user.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to delete item photos");
         }
+        String company = companyAccess.requireCompany(user);
 
         ItemPhoto p = photos.findById(photoId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "photo not found"));
+        companyAccess.ensureItemAccess(company, p.getItem(), "photo not found");
         if (!p.getItem().getId().equals(itemId)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "photo does not belong to item");
         }

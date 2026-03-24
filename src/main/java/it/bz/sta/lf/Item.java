@@ -1,6 +1,7 @@
 package it.bz.sta.lf;
 
 import jakarta.persistence.*;
+
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -8,12 +9,11 @@ import java.util.UUID;
 @Table(name = "items")
 public class Item {
 
-    // Central definition of all allowed states (must match DB check constraint)
-    public static final String STATE_REPORTED             = "REPORTED";
-    public static final String STATE_SHELVED              = "SHELVED";
-    public static final String STATE_ON_HOLD              = "ON_HOLD";
-    public static final String STATE_READY_FOR_TRANSFER   = "READY_FOR_TRANSFER";
-    public static final String STATE_RETURNED             = "RETURNED";
+    public static final String STATE_REPORTED = "REPORTED";
+    public static final String STATE_SHELVED = "SHELVED";
+    public static final String STATE_ON_HOLD = "ON_HOLD";
+    public static final String STATE_READY_FOR_TRANSFER = "READY_FOR_TRANSFER";
+    public static final String STATE_RETURNED = "RETURNED";
     public static final String STATE_TRANSFERRED_TO_COMUNE = "TRANSFERRED_TO_COMUNE";
 
     @Id
@@ -24,7 +24,6 @@ public class Item {
     @Column(name = "found_at")
     private OffsetDateTime foundAt;
 
-    // Default: REPORTED
     @Column(nullable = false)
     private String state = STATE_REPORTED;
 
@@ -34,14 +33,17 @@ public class Item {
     @Column(name = "category_sub", nullable = false)
     private String categorySub = "OTHER";
 
-    @Column(name =  "transport_type")
+    @Column(name = "transport_type")
     private String transportType;
 
-    @Column(name =  "transport_line")
+    @Column(name = "transport_line")
     private String transportLine;
 
-    @Column(name =  "transport_line_de")
+    @Column(name = "transport_line_de")
     private String transportLineDe;
+
+    @Column(nullable = false)
+    private String company = CompanyAccessService.DEFAULT_COMPANY;
 
     @ManyToOne
     @JoinColumn(name = "current_location_id")
@@ -68,8 +70,6 @@ public class Item {
     public String getState() { return state; }
     public void setState(String state) { this.state = state; }
 
-    public Location getCurrentLocation() { return currentLocation; }
-    public void setCurrentLocation(Location currentLocation) { this.currentLocation = currentLocation; }
 
     public String getCategoryMain() { return categoryMain; }
     public void setCategoryMain(String categoryMain) { this.categoryMain = categoryMain; }
@@ -86,4 +86,9 @@ public class Item {
     public String getTransportLineDe() { return transportLineDe; }
     public void setTransportLineDe(String transportLineDe) { this.transportLineDe = transportLineDe; }
 
+    public String getCompany() { return company; }
+    public void setCompany(String company) { this.company = company; }
+
+    public Location getCurrentLocation() { return currentLocation; }
+    public void setCurrentLocation(Location currentLocation) { this.currentLocation = currentLocation; }
 }

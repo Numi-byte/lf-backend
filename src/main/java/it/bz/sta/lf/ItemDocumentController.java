@@ -19,11 +19,13 @@ public class ItemDocumentController {
     private final ItemRepository items;
     private final ItemDocumentRepository docs;
     private final AuditService audits;
+    private final CompanyAccessService companyAccess;
 
-    public ItemDocumentController(ItemRepository items, ItemDocumentRepository docs, AuditService audits) {
+    public ItemDocumentController(ItemRepository items, ItemDocumentRepository docs, AuditService audits, CompanyAccessService companyAccess) {
         this.items = items;
         this.docs = docs;
         this.audits = audits;
+        this.companyAccess = companyAccess;
     }
 
     public record DocumentReq(
@@ -78,6 +80,7 @@ public class ItemDocumentController {
         if (user == null || user.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to register document info");
         }
+        String company = companyAccess.requireCompany(user);
 
         if (req == null || req.docType() == null || req.docType().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "docType is required");
@@ -88,6 +91,7 @@ public class ItemDocumentController {
 
         Item item = items.findById(itemId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
+        companyAccess.ensureItemAccess(company, item, "item not found");
 
         LocalDate birthdate = null;
         if (req.docBirthdate() != null && !req.docBirthdate().isBlank()) {
@@ -144,9 +148,11 @@ public class ItemDocumentController {
         if (user == null || user.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to view document info");
         }
+        String company = companyAccess.requireCompany(user);
 
-        items.findById(itemId)
+        Item item = items.findById(itemId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
+        companyAccess.ensureItemAccess(company, item, "item not found");
 
         return docs.findByItem_Id(itemId).stream()
                 .map(DocumentDto::from)

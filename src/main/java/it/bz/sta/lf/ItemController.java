@@ -18,26 +18,31 @@ public class ItemController {
 
     private final ItemRepository repo;
     private final LocationRepository locations;
+    private final DepotRepository depots;
     private final AuditService audits;
     private final CategoryCatalog categoryCatalog;
+    private final CompanyAccessService companyAccess;
 
     public ItemController(
             ItemRepository repo,
             LocationRepository locations,
+            DepotRepository depots,
             AuditService audits,
-            CategoryCatalog categoryCatalog
+            CategoryCatalog categoryCatalog,
+            CompanyAccessService companyAccess
     ) {
         this.repo = repo;
         this.locations = locations;
+        this.depots = depots;
         this.audits = audits;
         this.categoryCatalog = categoryCatalog;
+        this.companyAccess = companyAccess;
     }
 
-    // small request DTOs
     public record CreateItem(
             String description,
-            String categoryMain, // e.g. "KEYS"
-            String categorySub,   // e.g. "VEHICLE_KEY_SINGLE"
+            String categoryMain,
+            String categorySub,
             String transportType,
             String transportLine,
             String transportLineDe
@@ -56,29 +61,34 @@ public class ItemController {
 
     public record TransferToComuneReq(UUID comuneTransferId) {}
 
-    // ---------- Basic list (internal, login required) ----------
     @GetMapping
     public List<ItemDto> all(
             @RequestHeader(value = "X-User", required = false) String user
     ) {
         requireUser(user, "login required to list items");
-        return repo.findAll().stream().map(ItemDto::from).toList();
+        String company = companyAccess.requireCompany(user);
+        return repo.findAll().stream()
+                .filter(item -> companyAccess.canAccessItem(company, item))
+                .map(ItemDto::from)
+                .toList();
     }
 
-    // ---------- Get single item by id (internal, login required) ----------
     @GetMapping("/{id}")
     public ResponseEntity<ItemDto> getOne(
             @PathVariable("id") UUID id,
             @RequestHeader(value = "X-User", required = false) String user
     ) {
         requireUser(user, "login required to view items");
+        String company = companyAccess.requireCompany(user);
 
         return repo.findById(id)
-                .map(item -> ResponseEntity.ok(ItemDto.from(item)))
+                .map(item -> {
+                    companyAccess.ensureItemAccess(company, item, "item not found");
+                    return ResponseEntity.ok(ItemDto.from(item));
+                })
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    // ---------- Create → REPORTED (internal, login required) ----------
     @PostMapping
     public ResponseEntity<ItemDto> create(
             @RequestBody CreateItem req,
@@ -90,12 +100,8 @@ public class ItemController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "description is required");
         }
 
-        // Category rules:
-        // - none provided => default MISC/OTHER (old clients still work)
-        // - both provided => must exist in catalog
-        // - only one provided => 400
         boolean mainBlank = (req.categoryMain() == null || req.categoryMain().isBlank());
-        boolean subBlank  = (req.categorySub()  == null || req.categorySub().isBlank());
+        boolean subBlank = (req.categorySub() == null || req.categorySub().isBlank());
 
         String main;
         String sub;
@@ -104,17 +110,12 @@ public class ItemController {
             main = "MISC";
             sub = "OTHER";
         } else if (mainBlank || subBlank) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "categoryMain and categorySub must be provided together"
-            );
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "categoryMain and categorySub must be provided together");
         } else {
-            // Canonicalize (trim, uppercase, alias mapping)
             CategoryCatalog.Canonical canon = categoryCatalog.canonicalize(req.categoryMain(), req.categorySub());
             main = canon.main();
-            sub  = canon.sub();
+            sub = canon.sub();
 
-            // Validate against catalog
             if (!categoryCatalog.isValidMain(main)) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid categoryMain: " + main);
             }
@@ -124,6 +125,7 @@ public class ItemController {
         }
 
         Item item = new Item(UUID.randomUUID(), req.description(), OffsetDateTime.now());
+        companyAccess.assignItemCompanyFromUser(item, user);
         item.setCategoryMain(main);
         item.setCategorySub(sub);
         item.setTransportType(blankToNull(req.transportType()));
@@ -139,6 +141,7 @@ public class ItemController {
                 user,
                 "{"
                         + "\"description\":\"" + saved.getDescription() + "\","
+                        + "\"company\":\"" + saved.getCompany() + "\","
                         + "\"categoryMain\":\"" + saved.getCategoryMain() + "\","
                         + "\"categorySub\":\"" + saved.getCategorySub() + "\","
                         + "\"transportType\":" + jsonNullable(saved.getTransportType()) + ","
@@ -158,15 +161,17 @@ public class ItemController {
             @RequestHeader(value = "X-User", required = false) String user
     ) {
         requireUser(user, "login required to update items");
+        String company = companyAccess.requireCompany(user);
         if (req == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request body is required");
         }
 
-        Item it = repo.findById(id)
+        Item item = repo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
+        companyAccess.ensureItemAccess(company, item, "item not found");
 
         if (req.description() != null && !req.description().isBlank()) {
-            it.setDescription(req.description().trim());
+            item.setDescription(req.description().trim());
         }
 
         boolean mainProvided = req.categoryMain() != null;
@@ -187,41 +192,20 @@ public class ItemController {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid categorySub for " + main + ": " + sub);
             }
 
-            it.setCategoryMain(main);
-            it.setCategorySub(sub);
+            item.setCategoryMain(main);
+            item.setCategorySub(sub);
         }
 
-        if (req.transportType() != null) it.setTransportType(blankToNull(req.transportType()));
-        if (req.transportLine() != null) it.setTransportLine(blankToNull(req.transportLine()));
+        if (req.transportType() != null) item.setTransportType(blankToNull(req.transportType()));
+        if (req.transportLine() != null) item.setTransportLine(blankToNull(req.transportLine()));
         if (req.transportLineDe() != null || req.transportLine() != null) {
-            it.setTransportLineDe(resolveGermanLine(req.transportLine() != null ? req.transportLine() : it.getTransportLine(), req.transportLineDe()));
+            item.setTransportLineDe(resolveGermanLine(req.transportLine() != null ? req.transportLine() : item.getTransportLine(), req.transportLineDe()));
         }
 
-        return ResponseEntity.ok(ItemDto.from(it));
+        return ResponseEntity.ok(ItemDto.from(item));
     }
 
-    private static String blankToNull(String value) {
-        return (value == null || value.isBlank()) ? null : value.trim();
-    }
 
-    private static String resolveGermanLine(String line, String lineDe) {
-        if (lineDe != null && !lineDe.isBlank()) {
-            return lineDe.trim();
-        }
-
-        if (line == null || line.isBlank()) {
-            return null;
-        }
-
-        String[] split = line.split("/", 2);
-        return split.length > 1 ? split[0].trim() : null;
-    }
-
-    private static String jsonNullable(String value) {
-        return value == null ? "null" : "\"" + value.replace("\"", "\\\"") + "\"";
-    }
-
-    // ---------- Store → SHELVED (internal, login required) ----------
     @PostMapping("/{id}/store")
     @Transactional
     public ResponseEntity<ItemDto> store(
@@ -230,37 +214,39 @@ public class ItemController {
             @RequestHeader(value = "X-User", required = false) String user
     ) {
         requireUser(user, "login required to store items");
+        String company = companyAccess.requireCompany(user);
 
         if (req == null || req.locationId() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "locationId is required");
         }
 
-        Item it = repo.findById(id)
+        Item item = repo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
 
-        Location loc = locations.findById(req.locationId())
+        Location location = locations.findById(req.locationId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "location not found"));
 
-        String before = "{\"state\":\"" + it.getState() + "\",\"currentLocationId\":\"" +
-                (it.getCurrentLocation() == null ? "" : it.getCurrentLocation().getId()) + "\"}";
+        String before = "{\"state\":\"" + item.getState() + "\",\"currentLocationId\":\"" +
+                (item.getCurrentLocation() == null ? "" : item.getCurrentLocation().getId()) + "\",\"company\":\"" + item.getCompany() + "\"}";
 
-        it.setCurrentLocation(loc);
-        it.setState(Item.STATE_SHELVED);
+        item.setCurrentLocation(location);
+        companyAccess.assignItemCompanyFromDepot(item, location.getDepot());
+        item.setState(Item.STATE_SHELVED);
 
-        String after = "{\"state\":\"" + it.getState() + "\",\"currentLocationId\":\"" + loc.getId() + "\"}";
+        String after = "{\"state\":\"" + item.getState() + "\",\"currentLocationId\":\"" + location.getId() + "\",\"company\":\"" + item.getCompany() + "\"}";
 
         audits.log(
                 "ITEM_SHELVED",
                 "ITEM",
-                it.getId(),
+                item.getId(),
                 user,
                 "{\"before\":" + before + ",\"after\":" + after + "}"
         );
 
-        return ResponseEntity.ok(ItemDto.from(it));
+        return ResponseEntity.ok(ItemDto.from(item));
     }
 
-    // ---------- Mark READY_FOR_TRANSFER (internal, login required) ----------
+
     @PostMapping("/{id}/ready-for-transfer")
     @Transactional
     public ResponseEntity<ItemDto> readyForTransfer(
@@ -268,34 +254,26 @@ public class ItemController {
             @RequestHeader(value = "X-User", required = false) String user
     ) {
         requireUser(user, "login required to mark items READY_FOR_TRANSFER");
+        String company = companyAccess.requireCompany(user);
 
-        Item it = repo.findById(id)
+        Item item = repo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
+        companyAccess.ensureItemAccess(company, item, "item not found");
 
-        // Only allow from SHELVED or ON_HOLD
-        if (!Item.STATE_SHELVED.equals(it.getState()) && !Item.STATE_ON_HOLD.equals(it.getState())) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "item must be SHELVED or ON_HOLD to mark READY_FOR_TRANSFER"
-            );
+        if (!Item.STATE_SHELVED.equals(item.getState()) && !Item.STATE_ON_HOLD.equals(item.getState())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "item must be SHELVED or ON_HOLD to mark READY_FOR_TRANSFER");
         }
 
-        String before = "{\"state\":\"" + it.getState() + "\"}";
-        it.setState(Item.STATE_READY_FOR_TRANSFER);
-        String after = "{\"state\":\"" + it.getState() + "\"}";
+        String before = "{\"state\":\"" + item.getState() + "\"}";
+        item.setState(Item.STATE_READY_FOR_TRANSFER);
+        String after = "{\"state\":\"" + item.getState() + "\"}";
 
-        audits.log(
-                "ITEM_READY_FOR_TRANSFER",
-                "ITEM",
-                it.getId(),
-                user,
-                "{\"before\":" + before + ",\"after\":" + after + "}"
-        );
+        audits.log("ITEM_READY_FOR_TRANSFER", "ITEM", item.getId(), user, "{\"before\":" + before + ",\"after\":" + after + "}");
 
-        return ResponseEntity.ok(ItemDto.from(it));
+        return ResponseEntity.ok(ItemDto.from(item));
     }
 
-    // ---------- Transfer to Comune (internal, login required) ----------
+
     @PostMapping("/{id}/transfer-to-comune")
     @Transactional
     public ResponseEntity<ItemDto> transferToComune(
@@ -304,43 +282,38 @@ public class ItemController {
             @RequestHeader(value = "X-User", required = false) String user
     ) {
         requireUser(user, "login required to transfer items to comune");
+        String company = companyAccess.requireCompany(user);
 
-        Item it = repo.findById(id)
+        Item item = repo.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
+        companyAccess.ensureItemAccess(company, item, "item not found");
 
-        if (!Item.STATE_READY_FOR_TRANSFER.equals(it.getState())) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "item must be READY_FOR_TRANSFER to transfer to comune"
-            );
+        if (!Item.STATE_READY_FOR_TRANSFER.equals(item.getState())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "item must be READY_FOR_TRANSFER to transfer to comune");
         }
 
-        String before = "{\"state\":\"" + it.getState() + "\"}";
-        it.setState(Item.STATE_TRANSFERRED_TO_COMUNE);
-        String after = "{\"state\":\"" + it.getState() + "\"}";
+        String before = "{\"state\":\"" + item.getState() + "\"}";
+        item.setState(Item.STATE_TRANSFERRED_TO_COMUNE);
+        String after = "{\"state\":\"" + item.getState() + "\"}";
 
-        String comuneTransferId = (req != null && req.comuneTransferId() != null)
-                ? req.comuneTransferId().toString()
-                : null;
+        String comuneTransferId = (req != null && req.comuneTransferId() != null) ? req.comuneTransferId().toString() : null;
 
         audits.log(
                 "ITEM_TRANSFERRED_TO_COMUNE",
                 "ITEM",
-                it.getId(),
+                item.getId(),
                 user,
                 "{"
                         + "\"before\":" + before + ","
                         + "\"after\":" + after + ","
-                        + (comuneTransferId == null
-                        ? "\"comuneTransferId\":null"
-                        : "\"comuneTransferId\":\"" + comuneTransferId + "\"")
+                        + (comuneTransferId == null ? "\"comuneTransferId\":null" : "\"comuneTransferId\":\"" + comuneTransferId + "\"")
                         + "}"
         );
 
-        return ResponseEntity.ok(ItemDto.from(it));
+        return ResponseEntity.ok(ItemDto.from(item));
     }
 
-    // ---------- General search (internal, login required) ----------
+
     @GetMapping("/search")
     public List<ItemDto> search(
             @RequestParam(name = "text", required = false) String text,
@@ -351,42 +324,37 @@ public class ItemController {
             @RequestHeader(value = "X-User", required = false) String user
     ) {
         requireUser(user, "login required to search items");
+        String company = companyAccess.requireCompany(user);
+        validateDepotAccess(depotId, company);
 
         OffsetDateTime fromTs = null, toTs = null;
         try { if (from != null && !from.isBlank()) fromTs = OffsetDateTime.parse(from); } catch (Exception ignored) {}
         try { if (to   != null && !to.isBlank())   toTs   = OffsetDateTime.parse(to);   } catch (Exception ignored) {}
 
-        // 1) DB: filter by state + depot
-        List<Item> items = repo.search(state, depotId);
+        List<Item> items = repo.search(state, depotId).stream()
+                .filter(item -> companyAccess.canAccessItem(company, item))
+                .toList();
 
         // 2) Java: filter by date range
         if (fromTs != null) {
             OffsetDateTime finalFromTs = fromTs;
-            items = items.stream()
-                    .filter(i -> i.getFoundAt() != null && !i.getFoundAt().isBefore(finalFromTs))
-                    .toList();
+            items = items.stream().filter(i -> i.getFoundAt() != null && !i.getFoundAt().isBefore(finalFromTs)).toList();
         }
-
         if (toTs != null) {
             OffsetDateTime finalToTs = toTs;
-            items = items.stream()
-                    .filter(i -> i.getFoundAt() != null && !i.getFoundAt().isAfter(finalToTs))
-                    .toList();
+            items = items.stream().filter(i -> i.getFoundAt() != null && !i.getFoundAt().isAfter(finalToTs)).toList();
         }
 
-        // 3) Java: free-text search on description
+
         if (text != null && !text.isBlank()) {
             String needle = text.toLowerCase();
-            items = items.stream()
-                    .filter(i -> i.getDescription() != null &&
-                            i.getDescription().toLowerCase().contains(needle))
-                    .toList();
+            items = items.stream().filter(i -> i.getDescription() != null && i.getDescription().toLowerCase().contains(needle)).toList();
         }
 
         return items.stream().map(ItemDto::from).toList();
     }
 
-    // ---------- Archive search for CS (RETURNED + TRANSFERRED_TO_COMUNE) ----------
+
     @GetMapping("/archive")
     public List<ItemDto> archive(
             @RequestParam(name = "text", required = false) String text,
@@ -396,42 +364,67 @@ public class ItemController {
             @RequestHeader(value = "X-User", required = false) String user
     ) {
         requireUser(user, "login required to search archive");
+        String company = companyAccess.requireCompany(user);
+        validateDepotAccess(depotId, company);
 
         OffsetDateTime fromTs = null, toTs = null;
         try { if (from != null && !from.isBlank()) fromTs = OffsetDateTime.parse(from); } catch (Exception ignored) {}
         try { if (to   != null && !to.isBlank())   toTs   = OffsetDateTime.parse(to);   } catch (Exception ignored) {}
 
         // 1) DB: only archive states + depot
-        List<Item> items = repo.searchArchive(depotId);
+        List<Item> items = repo.searchArchive(depotId).stream()
+                .filter(item -> companyAccess.canAccessItem(company, item))
+                .toList();
 
-        // 2) Java: date filter
+
         if (fromTs != null) {
             OffsetDateTime finalFromTs = fromTs;
-            items = items.stream()
-                    .filter(i -> i.getFoundAt() != null && !i.getFoundAt().isBefore(finalFromTs))
-                    .toList();
+            items = items.stream().filter(i -> i.getFoundAt() != null && !i.getFoundAt().isBefore(finalFromTs)).toList();
         }
 
         if (toTs != null) {
             OffsetDateTime finalToTs = toTs;
-            items = items.stream()
-                    .filter(i -> i.getFoundAt() != null && !i.getFoundAt().isAfter(finalToTs))
-                    .toList();
+            items = items.stream().filter(i -> i.getFoundAt() != null && !i.getFoundAt().isAfter(finalToTs)).toList();
         }
 
-        // 3) Java: text filter
+
         if (text != null && !text.isBlank()) {
             String needle = text.toLowerCase();
-            items = items.stream()
-                    .filter(i -> i.getDescription() != null &&
-                            i.getDescription().toLowerCase().contains(needle))
+            items = items.stream().filter(i -> i.getDescription() != null && i.getDescription().toLowerCase().contains(needle))
                     .toList();
         }
 
         return items.stream().map(ItemDto::from).toList();
     }
 
-    // ---------- helpers ----------
+    private void validateDepotAccess(UUID depotId, String company) {
+        if (depotId == null) {
+            return;
+        }
+        Depot depot = depots.findById(depotId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "depot not found"));
+        companyAccess.ensureDepotAccess(company, depot, "depot not found");
+    }
+
+    private static String blankToNull(String value) {
+        return (value == null || value.isBlank()) ? null : value.trim();
+    }
+
+    private static String resolveGermanLine(String line, String lineDe) {
+        if (lineDe != null && !lineDe.isBlank()) {
+            return lineDe.trim();
+        }
+        if (line == null || line.isBlank()) {
+            return null;
+        }
+        String[] split = line.split("/", 2);
+        return split.length > 1 ? split[0].trim() : null;
+    }
+
+    private static String jsonNullable(String value) {
+        return value == null ? "null" : "\"" + value.replace("\"", "\\\"") + "\"";
+    }
+
     private static void requireUser(String user, String msg) {
         if (user == null || user.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, msg);

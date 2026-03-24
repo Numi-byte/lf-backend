@@ -1,8 +1,10 @@
 package it.bz.sta.lf.dto;
 
+import it.bz.sta.lf.Item;
+
 import java.time.OffsetDateTime;
 import java.util.UUID;
-import it.bz.sta.lf.Item;
+
 
 public record ItemDto(
         UUID id,
@@ -10,6 +12,7 @@ public record ItemDto(
         OffsetDateTime foundAt,
         String state,
         UUID currentLocationId,
+        String company,
         String categoryMain,
         String categorySub,
         String transportType,
@@ -23,6 +26,7 @@ public record ItemDto(
                 it.getFoundAt(),
                 it.getState(),
                 it.getCurrentLocation() != null ? it.getCurrentLocation().getId() : null,
+                it.getCompany(),
                 it.getCategoryMain(),
                 it.getCategorySub(),
                 it.getTransportType(),

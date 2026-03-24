@@ -25,19 +25,22 @@ public class PublicItemController {
     private final IdMatchRateLimiter rateLimiter;
     private final ClaimRepository claims;
     private final AuditService audits;
+    private final CompanyAccessService companyAccess;
 
     public PublicItemController(
             ItemRepository items,
             ItemDocumentRepository docs,
             IdMatchRateLimiter rateLimiter,
             ClaimRepository claims,
-            AuditService audits
+            AuditService audits,
+            CompanyAccessService companyAccess
     ) {
         this.items = items;
         this.docs = docs;
         this.rateLimiter = rateLimiter;
         this.claims = claims;
         this.audits = audits;
+        this.companyAccess = companyAccess;
     }
 
     // ==== 1) Public ID-match request body ====
@@ -125,11 +128,15 @@ public class PublicItemController {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required");
         }
 
+        String company = companyAccess.requireCompany(user);
+
         OffsetDateTime fromTs = null, toTs = null;
         try { if (from != null && !from.isBlank()) fromTs = OffsetDateTime.parse(from); } catch (Exception ignored) {}
         try { if (to   != null && !to.isBlank())   toTs   = OffsetDateTime.parse(to);   } catch (Exception ignored) {}
 
-        List<Item> list = items.search(null, depotId);
+        List<Item> list = items.search(null, depotId).stream()
+                .filter(i -> companyAccess.canAccessItem(company, i))
+                .toList();
 
         // exclude archived
         list = list.stream()
@@ -212,9 +219,12 @@ public class PublicItemController {
 
         List<ItemDocument> matches = docs.findByDocMatchHash(hash);
 
+        String company = companyAccess.requireCompany(user);
+
         List<Item> candidateItems = matches.stream()
                 .map(ItemDocument::getItem)
                 .filter(Objects::nonNull)
+                .filter(item -> companyAccess.canAccessItem(company, item))
                 .collect(Collectors.toMap(
                         Item::getId,
                         i -> i,
