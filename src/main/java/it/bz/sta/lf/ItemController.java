@@ -364,18 +364,14 @@ public class ItemController {
             @RequestHeader(value = "X-User", required = false) String user
     ) {
         requireUser(user, "login required to search archive");
-        String company = companyAccess.requireCompany(user);
-        validateDepotAccess(depotId, company);
+        validateDepotExists(depotId);
 
         OffsetDateTime fromTs = null, toTs = null;
         try { if (from != null && !from.isBlank()) fromTs = OffsetDateTime.parse(from); } catch (Exception ignored) {}
         try { if (to   != null && !to.isBlank())   toTs   = OffsetDateTime.parse(to);   } catch (Exception ignored) {}
 
         // 1) DB: only archive states + depot
-        List<Item> items = repo.searchArchive(depotId).stream()
-                .filter(item -> companyAccess.canAccessItem(company, item))
-                .toList();
-
+        List<Item> items = repo.searchArchive(depotId);
 
         if (fromTs != null) {
             OffsetDateTime finalFromTs = fromTs;
@@ -404,6 +400,14 @@ public class ItemController {
         Depot depot = depots.findById(depotId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "depot not found"));
         companyAccess.ensureDepotAccess(company, depot, "depot not found");
+    }
+
+    private void validateDepotExists(UUID depotId) {
+        if (depotId == null) {
+            return;
+        }
+        depots.findById(depotId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "depot not found"));
     }
 
     private static String blankToNull(String value) {

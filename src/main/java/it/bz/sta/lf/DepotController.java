@@ -28,10 +28,8 @@ public class DepotController {
             @RequestHeader(value = "X-User", required = false) String user
     ) {
         requireUser(user, "login required to list depots");
-        String company = companyAccess.requireCompany(user);
 
         return depots.findAll().stream()
-                .filter(depot -> companyAccess.canAccessDepot(company, depot))
                 .map(DepotDto::from)
                 .toList();
     }
