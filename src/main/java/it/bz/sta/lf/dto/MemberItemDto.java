@@ -9,7 +9,7 @@ import java.util.UUID;
  * Logged-in public user view.
  * - Still no grid location ID
  * - Depot name is allowed
- * - Photos are fetched via /items/{id}/photos (now protected)
+ * - Photos are fetched via /items/{id}/photos (publicly accessible)
  */
 public record MemberItemDto(
         UUID id,

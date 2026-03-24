@@ -25,7 +25,7 @@ public class ItemPhotoController {
 
 
     public ItemPhotoController(ItemRepository items, ItemPhotoRepository photos, S3StorageService storage, CompanyAccessService companyAccess){
-        this.items=items; this.photos=photos; this.storage=storage; this.companyAccess=new CompanyAccessService();
+        this.items=items; this.photos=photos; this.storage=storage; this.companyAccess=companyAccess;
     }
 
 
@@ -66,18 +66,11 @@ public class ItemPhotoController {
 
     @GetMapping("/{id}/photos")
     public List<ItemPhotoDto> list(
-            @PathVariable("id") UUID itemId,
-            @RequestHeader(value = "X-User", required = false) String user
+            @PathVariable("id") UUID itemId
     ) throws Exception {
 
-        if (user == null || user.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to view item photos");
-        }
-        String company = companyAccess.requireCompany(user);
-
-        Item item = items.findById(itemId)
+        items.findById(itemId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "item not found"));
-        companyAccess.ensureItemAccess(company, item, "item not found");
 
         List<ItemPhoto> list = photos.findByItemId(itemId);
         List<ItemPhotoDto> out = new ArrayList<>();
