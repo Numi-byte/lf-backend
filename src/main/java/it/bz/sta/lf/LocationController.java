@@ -31,13 +31,16 @@ public class LocationController {
             @RequestHeader(value = "X-User", required = false) String user
     ) {
         requireUser(user, "login required to list locations");
+        String company = companyAccess.requireCompany(user);
 
         if (depotId != null) {
-            depots.findById(depotId)
+            Depot depot = depots.findById(depotId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "depot not found"));
+            companyAccess.ensureDepotAccess(company, depot, "depot not found");
         }
 
         return locations.findAll().stream()
+                .filter(location -> companyAccess.canAccessLocation(company, location))
                 .filter(location -> depotId == null || (location.getDepot() != null && depotId.equals(location.getDepot().getId())))
                 .map(LocationDto::from)
                 .toList();
