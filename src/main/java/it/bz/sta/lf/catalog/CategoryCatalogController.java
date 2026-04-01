@@ -19,13 +19,7 @@ public class CategoryCatalogController {
     public record Category(String code, Map<String, String> label, String iconKey, List<SubCategory> subcategories) {}
 
     @GetMapping("/categories")
-    public List<Category> categories(
-            @RequestHeader(value = "X-User", required = false) String user
-    ) {
-        if (user != null && !user.isBlank()) {
-            return rawCategories();
-        }
-
+    public List<Category> categories() {
         CatalogVisibilityService.VisibilityState visibilityState = visibilityService.getVisibilityState();
 
         return rawCategories().stream()

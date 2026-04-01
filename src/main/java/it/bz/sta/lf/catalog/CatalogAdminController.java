@@ -38,6 +38,14 @@ public class CatalogAdminController {
         return toResponse(visibilityService.getVisibilityState());
     }
 
+    @GetMapping("/categories")
+    public List<CategoryCatalogController.Category> adminCategories(
+            @RequestHeader(value = "X-User", required = false) String user
+    ) {
+        requireUser(user);
+        return categoryCatalogController.rawCategories();
+    }
+
     @PutMapping("/visibility")
     public VisibilityResponse replaceVisibility(
             @RequestBody List<VisibilityRuleRequest> req,

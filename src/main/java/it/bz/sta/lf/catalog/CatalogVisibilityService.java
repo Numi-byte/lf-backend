@@ -34,11 +34,17 @@ public class CatalogVisibilityService {
         Map<String, Set<String>> hiddenSubsByMain = new HashMap<>();
 
         for (CatalogVisibilityRule rule : rules) {
-            if (rule.getSubCode() == null || rule.getSubCode().isBlank()) {
-                hiddenMains.add(rule.getMainCode());
+            String main = normalizeCode(rule.getMainCode());
+            if (main == null) {
+                continue;
+            }
+
+            String sub = normalizeCode(rule.getSubCode());
+            if (sub == null) {
+                hiddenMains.add(main);
             } else {
-                hiddenSubsByMain.computeIfAbsent(rule.getMainCode(), ignored -> new HashSet<>())
-                        .add(rule.getSubCode());
+                hiddenSubsByMain.computeIfAbsent(main, ignored -> new HashSet<>())
+                        .add(sub);
             }
         }
 
@@ -56,10 +62,16 @@ public class CatalogVisibilityService {
             if (!rule.hidden()) {
                 continue;
             }
-            String key = rule.mainCode() + "|" + (rule.subCode() == null ? "" : rule.subCode());
+            String main = normalizeCode(rule.mainCode());
+            if (main == null) {
+                continue;
+            }
+            String sub = normalizeCode(rule.subCode());
+
+            String key = main + "|" + (sub == null ? "" : sub);
             CatalogVisibilityRule entity = new CatalogVisibilityRule();
-            entity.setMainCode(rule.mainCode());
-            entity.setSubCode(rule.subCode());
+            entity.setMainCode(main);
+            entity.setSubCode(sub);
             byKey.put(key, entity);
         }
 
@@ -67,5 +79,12 @@ public class CatalogVisibilityService {
 
         repository.saveAll(newRules);
         return getVisibilityState();
+    }
+
+    private static String normalizeCode(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim().toUpperCase(Locale.ROOT);
     }
 }
