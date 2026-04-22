@@ -14,6 +14,7 @@ import org.springframework.security.web.SecurityFilterChain;
 
 import org.springframework.security.config.http.SessionCreationPolicy;
 
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -21,12 +22,19 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @Configuration
 public class SecurityConfig {
 
+    private final it.bz.sta.lf.auth.AppAuthenticationFilter appAuthenticationFilter;
+
+    public SecurityConfig(it.bz.sta.lf.auth.AppAuthenticationFilter appAuthenticationFilter) {
+        this.appAuthenticationFilter = appAuthenticationFilter;
+    }
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         return http
                 .cors(Customizer.withDefaults())
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .addFilterBefore(appAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .formLogin(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth -> auth
@@ -34,11 +42,10 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
                         // ✅ public endpoints
-                        .requestMatchers("/public/**").permitAll()
-
-                        // For now, let controllers enforce X-User checks.
-                        // (Later you can replace with real auth + roles.)
-                        .anyRequest().permitAll()
+                        .requestMatchers("/public/**", "/api/public/**").permitAll()
+                        .requestMatchers("/auth/**", "/api/auth/**").permitAll()
+                        .requestMatchers("/catalog/admin/**", "/api/catalog/admin/**").hasRole("ADMIN")
+                        .anyRequest().authenticated()
                 )
                 .build();
     }
@@ -71,7 +78,7 @@ public class SecurityConfig {
         // optional: if you need to read headers client-side
         cfg.setExposedHeaders(List.of());
 
-        cfg.setAllowCredentials(false);
+        cfg.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource src = new UrlBasedCorsConfigurationSource();
         src.registerCorsConfiguration("/**", cfg);
