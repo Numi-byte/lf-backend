@@ -1,24 +1,34 @@
 package it.bz.sta.lf;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import it.bz.sta.lf.dto.TransferManifestDto;
 import it.bz.sta.lf.dto.TransferManifestItemDto;
 import it.bz.sta.lf.storage.S3StorageService;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
 @RequestMapping("/comune-transfers")
 public class TransferManifestController {
+    public static final long MAX_SIGNATURE_BYTES = 2L * 1024 * 1024;
 
     private final TransferManifestRepository manifests;
     private final DepotRepository depots;
@@ -27,6 +37,8 @@ public class TransferManifestController {
     private final S3StorageService storage;
     private final AuditService audits;
     private final CompanyAccessService companyAccess;
+    private final TransferManifestPdfService pdfService;
+    private final ObjectMapper objectMapper;
 
     public TransferManifestController(
             TransferManifestRepository manifests,
@@ -35,7 +47,9 @@ public class TransferManifestController {
             ItemPhotoRepository itemPhotos,
             S3StorageService storage,
             AuditService audits,
-            CompanyAccessService companyAccess
+            CompanyAccessService companyAccess,
+            TransferManifestPdfService pdfService,
+            ObjectMapper objectMapper
     ) {
         this.manifests = manifests;
         this.depots = depots;
@@ -44,6 +58,8 @@ public class TransferManifestController {
         this.storage = storage;
         this.audits = audits;
         this.companyAccess = companyAccess;
+        this.pdfService = pdfService;
+        this.objectMapper = objectMapper;
     }
 
     public record PrepareComuneTransferReq(
@@ -53,6 +69,11 @@ public class TransferManifestController {
             Integer boxesCount,
             String sealsCount,
             String preparedBy
+    ) {}
+
+    public record DigitalSignatureReq(
+            String signatureDataUrl,
+            String signedBy
     ) {}
 
 
@@ -167,53 +188,105 @@ public class TransferManifestController {
         TransferManifest manifest = manifests.findById(manifestId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "manifest not found"));
         companyAccess.ensureManifestAccess(company, manifest, "manifest not found");
+        assertSignable(manifest);
 
         if (file == null || file.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "file is required");
         }
-        if ("SIGNED".equalsIgnoreCase(manifest.getStatus())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "manifest already signed");
-        }
-        if (manifest.getItems() == null || manifest.getItems().isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "manifest has no items");
+        if (file.getSize() > MAX_SIGNATURE_BYTES) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "signature file too large");
         }
 
-        String key = "comune-transfers/" + manifestId + "/signature-" + UUID.randomUUID();
+        String ext = extensionFromContentType(file.getContentType());
+        String key = "comune-transfers/" + manifestId + "/signature-" + UUID.randomUUID() + ext;
         try (var in = file.getInputStream()) {
             storage.put(key, in, file.getSize(), file.getContentType());
         }
-        manifest.setSignatureKey(key);
-        manifest.setSignedBy(signedBy != null && !signedBy.isBlank() ? signedBy : user);
-        manifest.setSignedAt(OffsetDateTime.now());
-        manifest.setStatus("SIGNED");
 
-        for (TransferManifestItem line : manifest.getItems()) {
-            Item item = line.getItem();
-            if (item == null) {
-                continue;
-            }
-            companyAccess.ensureItemAccess(company, item, "item not found");
-            String before = "{\"state\":\"" + item.getState() + "\"}";
-            item.setState(Item.STATE_TRANSFERRED_TO_COMUNE);
-            String after = "{\"state\":\"" + item.getState() + "\"}";
-            audits.log(
-                    "ITEM_TRANSFERRED_TO_COMUNE",
-                    "ITEM",
-                    item.getId(),
-                    manifest.getSignedBy(),
-                    "{\"company\":\"" + companyAccess.itemCompany(item) + "\",\"before\":" + before + ",\"after\":" + after + "}"
-            );
+        applySigning(manifest, signedBy, user, company, key);
+        return ResponseEntity.ok(toDto(manifest));
+    }
+
+    @PostMapping(path = "/{id}/sign-digital", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @Transactional
+    public ResponseEntity<TransferManifestDto> signManifestDigital(
+            @PathVariable("id") UUID manifestId,
+            @RequestBody DigitalSignatureReq req,
+            @RequestHeader(value = "X-User", required = false) String user
+    ) throws Exception {
+        requireUser(user, "login required to sign Comune transfer");
+        String company = companyAccess.requireCompany(user);
+
+        TransferManifest manifest = manifests.findById(manifestId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "manifest not found"));
+        companyAccess.ensureManifestAccess(company, manifest, "manifest not found");
+        assertSignable(manifest);
+
+        if (req == null || req.signatureDataUrl() == null || req.signatureDataUrl().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "signatureDataUrl is required");
         }
 
-        audits.log(
-                "COMUNE_TRANSFER_SIGNED",
-                "TRANSFER_MANIFEST",
-                manifest.getId(),
-                manifest.getSignedBy(),
-                "{\"signatureKey\":\"" + key + "\",\"company\":\"" + manifest.getDepot().getCompany() + "\",\"itemCount\":" + manifest.getItems().size() + "}"
-        );
+        DecodedSignature decoded = decodeSignatureDataUrl(req.signatureDataUrl());
+        String key = "comune-transfers/" + manifestId + "/signature-" + UUID.randomUUID() + decoded.extension();
 
+        try (var in = new ByteArrayInputStream(decoded.bytes())) {
+            storage.put(key, in, decoded.bytes().length, decoded.contentType());
+        }
+
+        applySigning(manifest, req.signedBy(), user, company, key);
         return ResponseEntity.ok(toDto(manifest));
+    }
+
+    @GetMapping(value = "/{id}/official-pdf", produces = MediaType.APPLICATION_PDF_VALUE)
+    public ResponseEntity<byte[]> downloadOfficialPdf(
+            @PathVariable("id") UUID manifestId,
+            @RequestParam(name = "lang", required = false, defaultValue = "de") String lang,
+            @RequestParam(name = "download", required = false, defaultValue = "true") boolean download,
+            @RequestHeader(value = "X-User", required = false) String user
+    ) throws IOException {
+        return buildOfficialPdfResponse(manifestId, lang, download, user);
+    }
+
+    @GetMapping(value = "/{id}/official-pdf/view", produces = MediaType.APPLICATION_PDF_VALUE)
+    public ResponseEntity<byte[]> viewOfficialPdf(
+            @PathVariable("id") UUID manifestId,
+            @RequestParam(name = "lang", required = false, defaultValue = "de") String lang,
+            @RequestHeader(value = "X-User", required = false) String user
+    ) throws IOException {
+        return buildOfficialPdfResponse(manifestId, lang, false, user);
+    }
+
+    @GetMapping(value = "/{id}/official-pdf/download", produces = MediaType.APPLICATION_PDF_VALUE)
+    public ResponseEntity<byte[]> downloadOfficialPdfAttachment(
+            @PathVariable("id") UUID manifestId,
+            @RequestParam(name = "lang", required = false, defaultValue = "de") String lang,
+            @RequestHeader(value = "X-User", required = false) String user
+    ) throws IOException {
+        return buildOfficialPdfResponse(manifestId, lang, true, user);
+    }
+
+    private ResponseEntity<byte[]> buildOfficialPdfResponse(
+            UUID manifestId,
+            String lang,
+            boolean download,
+            String user
+    ) throws IOException {
+        requireUser(user, "login required to download Comune transfer pdf");
+        String company = companyAccess.requireCompany(user);
+
+        TransferManifest manifest = manifests.findById(manifestId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "manifest not found"));
+        companyAccess.ensureManifestAccess(company, manifest, "manifest not found");
+
+        String normalizedLang = TransferManifestPdfService.normalizeLang(lang);
+        byte[] pdfBytes = pdfService.getOrCreateOfficialManifestPdf(manifest, normalizedLang, user);
+        String filename = "comune-transfer-" + manifest.getId() + "-" + normalizedLang + ".pdf";
+        String disposition = (download ? "attachment" : "inline") + "; filename=\"" + filename + "\"";
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .header(HttpHeaders.CONTENT_DISPOSITION, disposition)
+                .body(pdfBytes);
     }
 
     @GetMapping("/{id}")
@@ -255,6 +328,110 @@ public class TransferManifestController {
                 .filter(manifest -> manifest.getDepot() != null && companyAccess.canAccessDepot(company, manifest.getDepot()))
                 .map(this::toDto)
                 .toList();
+    }
+
+    private void assertSignable(TransferManifest manifest) {
+        if ("SIGNED".equalsIgnoreCase(manifest.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "manifest already signed");
+        }
+        if (manifest.getItems() == null || manifest.getItems().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "manifest has no items");
+        }
+    }
+
+    private void applySigning(TransferManifest manifest, String signedBy, String user, String company, String signatureKey) {
+        manifest.setSignatureKey(signatureKey);
+        manifest.setSignedBy(signedBy != null && !signedBy.isBlank() ? signedBy : user);
+        manifest.setSignedAt(OffsetDateTime.now());
+        manifest.setStatus("SIGNED");
+
+        for (TransferManifestItem line : manifest.getItems()) {
+            Item item = line.getItem();
+            if (item == null) {
+                continue;
+            }
+            companyAccess.ensureItemAccess(company, item, "item not found");
+            String beforeState = item.getState();
+            item.setState(Item.STATE_TRANSFERRED_TO_COMUNE);
+            String afterState = item.getState();
+            String auditPayload = toJson(Map.of(
+                    "company", companyAccess.itemCompany(item),
+                    "before", Map.of("state", beforeState),
+                    "after", Map.of("state", afterState)
+            ));
+            audits.log(
+                    "ITEM_TRANSFERRED_TO_COMUNE",
+                    "ITEM",
+                    item.getId(),
+                    manifest.getSignedBy(),
+                    auditPayload
+            );
+        }
+
+        String manifestAuditPayload = toJson(Map.of(
+                "signatureKey", signatureKey,
+                "company", manifest.getDepot().getCompany(),
+                "itemCount", manifest.getItems().size()
+        ));
+        audits.log(
+                "COMUNE_TRANSFER_SIGNED",
+                "TRANSFER_MANIFEST",
+                manifest.getId(),
+                manifest.getSignedBy(),
+                manifestAuditPayload
+        );
+    }
+
+    private static DecodedSignature decodeSignatureDataUrl(String dataUrl) {
+        String normalized = dataUrl.trim();
+        if (!normalized.startsWith("data:")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "signatureDataUrl must be a data URL");
+        }
+
+        int commaIndex = normalized.indexOf(',');
+        if (commaIndex < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid signatureDataUrl");
+        }
+
+        String meta = normalized.substring(5, commaIndex).toLowerCase(Locale.ROOT);
+        if (!meta.contains(";base64")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "signatureDataUrl must use base64 encoding");
+        }
+
+        String contentType = meta.substring(0, meta.indexOf(';'));
+        String extension = extensionFromContentType(contentType);
+
+        try {
+            byte[] bytes = Base64.getDecoder().decode(normalized.substring(commaIndex + 1));
+            if (bytes.length == 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "signature image is empty");
+            }
+            if (bytes.length > MAX_SIGNATURE_BYTES) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "signature image too large");
+            }
+            return new DecodedSignature(bytes, contentType, extension);
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid signatureDataUrl base64 payload");
+        }
+    }
+
+    private static String extensionFromContentType(String contentType) {
+        if (contentType == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "signature content type is required");
+        }
+        return switch (contentType.toLowerCase(Locale.ROOT)) {
+            case MediaType.IMAGE_PNG_VALUE -> ".png";
+            case MediaType.IMAGE_JPEG_VALUE -> ".jpg";
+            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "unsupported signature content type");
+        };
+    }
+
+    private String toJson(Map<String, Object> payload) {
+        try {
+            return objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "could not write audit payload");
+        }
     }
 
     private void validateDepotAccess(UUID depotId, String company) {
@@ -299,4 +476,6 @@ public class TransferManifestController {
 
         return TransferManifestDto.from(manifest, signatureUrl, itemsDto);
     }
+
+    private record DecodedSignature(byte[] bytes, String contentType, String extension) {}
 }
