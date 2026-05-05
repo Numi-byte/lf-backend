@@ -39,11 +39,12 @@ public class UserRoleResolver {
     public AppUserPrincipal fromLegacyUser(String userHeader) {
         String email = userHeader == null ? null : userHeader.trim();
         String company = resolveCompany(email);
-        return new AppUserPrincipal("legacy:" + safe(email), email, "customer", company);
+        String role = resolveRole(null, email);
+        return new AppUserPrincipal("legacy:" + safe(email), email, role, company);
     }
 
     private String resolveRole(Jwt jwt, String email) {
-        if (hasAdminRoleClaim(jwt)) {
+        if (jwt != null && hasAdminRoleClaim(jwt)) {
             return "admin";
         }
 

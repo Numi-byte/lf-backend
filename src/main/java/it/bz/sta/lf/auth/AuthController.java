@@ -4,6 +4,7 @@ import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
@@ -29,6 +30,9 @@ public class AuthController {
 
     @Value("${auth.session.cookie-secure:true}")
     private boolean secureCookie;
+
+    @Value("${auth.session.cookie-same-site:Lax}")
+    private String sameSite;
 
     public AuthController(
             MsalTokenValidator tokenValidator,
@@ -56,7 +60,7 @@ public class AuthController {
         Jwt jwt = tokenValidator.validate(token);
         AppUserPrincipal user = roleResolver.fromJwt(jwt);
         AppSession session = sessionService.create(user);
-        response.addCookie(buildCookie(session.token(), 60 * 60 * 8));
+        writeSessionCookie(response, session.token(), 60 * 60 * 8);
 
         return ResponseEntity.ok(new ExchangeResponse(toUserDto(user)));
     }
@@ -73,17 +77,19 @@ public class AuthController {
     public ResponseEntity<Void> logout(HttpServletRequest request, HttpServletResponse response) {
         String token = cookieValue(request, cookieName);
         sessionService.revoke(token);
-        response.addCookie(buildCookie("", 0));
+        writeSessionCookie(response, "", 0);
         return ResponseEntity.noContent().build();
     }
 
-    private Cookie buildCookie(String value, int maxAge) {
-        Cookie cookie = new Cookie(cookieName, value);
-        cookie.setHttpOnly(true);
-        cookie.setSecure(secureCookie);
-        cookie.setPath("/");
-        cookie.setMaxAge(maxAge);
-        return cookie;
+    private void writeSessionCookie(HttpServletResponse response, String value, int maxAge) {
+        ResponseCookie cookie = ResponseCookie.from(cookieName, value)
+                .httpOnly(true)
+                .secure(secureCookie)
+                .path("/")
+                .maxAge(maxAge)
+                .sameSite(sameSite)
+                .build();
+        response.addHeader("Set-Cookie", cookie.toString());
     }
 
     private String cookieValue(HttpServletRequest request, String name) {

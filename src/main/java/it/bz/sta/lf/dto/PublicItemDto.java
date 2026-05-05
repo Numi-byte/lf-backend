@@ -10,6 +10,7 @@ public record PublicItemDto(
         String description,
         OffsetDateTime foundAt,
         String depotName,
+        UUID currentLocationId,
         String categoryMain,
         String categorySub,
         String transportType,
@@ -22,6 +23,7 @@ public record PublicItemDto(
                 it.getDescription(),
                 it.getFoundAt(),
                 null, // IMPORTANT: hide depotName for anonymous
+                it.getCurrentLocation() != null ? it.getCurrentLocation().getId() : null,
                 it.getCategoryMain(),
                 it.getCategorySub(),
                 it.getTransportType(),
@@ -40,6 +42,7 @@ public record PublicItemDto(
                 it.getDescription(),
                 it.getFoundAt(),
                 depotName,
+                it.getCurrentLocation() != null ? it.getCurrentLocation().getId() : null,
                 it.getCategoryMain(),
                 it.getCategorySub(),
                 it.getTransportType(),

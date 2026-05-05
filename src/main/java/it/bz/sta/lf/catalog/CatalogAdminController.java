@@ -1,5 +1,7 @@
 package it.bz.sta.lf.catalog;
 
+import it.bz.sta.lf.CompanyAccessService;
+import it.bz.sta.lf.auth.AppUserPrincipal;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
@@ -12,13 +14,16 @@ public class CatalogAdminController {
 
     private final CategoryCatalogController categoryCatalogController;
     private final CatalogVisibilityService visibilityService;
+    private final CompanyAccessService companyAccessService;
 
     public CatalogAdminController(
             CategoryCatalogController categoryCatalogController,
-            CatalogVisibilityService visibilityService
+            CatalogVisibilityService visibilityService,
+            CompanyAccessService companyAccessService
     ) {
         this.categoryCatalogController = categoryCatalogController;
         this.visibilityService = visibilityService;
+        this.companyAccessService = companyAccessService;
     }
 
     public record VisibilityRuleRequest(String mainCode, String subCode, boolean hidden) {}
@@ -32,26 +37,29 @@ public class CatalogAdminController {
 
     @GetMapping("/visibility")
     public VisibilityResponse getVisibility(
-            @RequestHeader(value = "X-User", required = false) String user
+            @RequestHeader(value = "X-User", required = false) String user,
+            @org.springframework.security.core.annotation.AuthenticationPrincipal AppUserPrincipal principal
     ) {
-        requireUser(user);
+        requireStaAdminUser(user, principal, companyAccessService);
         return toResponse(visibilityService.getVisibilityState());
     }
 
     @GetMapping("/categories")
     public List<CategoryCatalogController.Category> adminCategories(
-            @RequestHeader(value = "X-User", required = false) String user
+            @RequestHeader(value = "X-User", required = false) String user,
+            @org.springframework.security.core.annotation.AuthenticationPrincipal AppUserPrincipal principal
     ) {
-        requireUser(user);
+        requireStaAdminUser(user, principal, companyAccessService);
         return categoryCatalogController.rawCategories();
     }
 
     @PutMapping("/visibility")
     public VisibilityResponse replaceVisibility(
             @RequestBody List<VisibilityRuleRequest> req,
-            @RequestHeader(value = "X-User", required = false) String user
+            @RequestHeader(value = "X-User", required = false) String user,
+            @org.springframework.security.core.annotation.AuthenticationPrincipal AppUserPrincipal principal
     ) {
-        requireUser(user);
+        requireStaAdminUser(user, principal, companyAccessService);
 
         if (req == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "request body is required");
@@ -67,9 +75,21 @@ public class CatalogAdminController {
         return toResponse(visibilityState);
     }
 
-    private static void requireUser(String user) {
-        if (user == null || user.isBlank()) {
+    private static void requireStaAdminUser(String user, AppUserPrincipal principal, CompanyAccessService companyAccessService) {
+        String resolvedCompany = null;
+
+        if (principal != null && principal.company() != null && !principal.company().isBlank()) {
+            resolvedCompany = companyAccessService.normalizeCompany(principal.company());
+        } else if (user != null && !user.isBlank()) {
+            resolvedCompany = companyAccessService.requireCompany(user);
+        }
+
+        if (resolvedCompany == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required");
+        }
+
+        if (!CompanyAccessService.DEFAULT_COMPANY.equals(resolvedCompany)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "STA access required");
         }
     }
 
