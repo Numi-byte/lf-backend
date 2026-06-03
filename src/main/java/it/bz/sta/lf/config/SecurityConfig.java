@@ -44,6 +44,14 @@ public class SecurityConfig {
                         // ✅ public endpoints
                         .requestMatchers("/public/**", "/api/public/**").permitAll()
                         .requestMatchers("/auth/**", "/api/auth/**").permitAll()
+
+                        // Public read-only API endpoints
+                        .requestMatchers(HttpMethod.GET,
+                                "/items", "/items/**",
+                                "/locations", "/depots",
+                                "/api/items", "/api/items/**",
+                                "/api/locations", "/api/depots").permitAll()
+
                         .requestMatchers("/catalog/admin/**", "/api/catalog/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
