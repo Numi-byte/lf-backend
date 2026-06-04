@@ -1,11 +1,13 @@
 package it.bz.sta.lf;
 
+import it.bz.sta.lf.storage.S3StorageService;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -18,6 +20,7 @@ import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 @Service
 public class TransferManifestPdfService {
@@ -27,9 +30,11 @@ public class TransferManifestPdfService {
     private static final float MARGIN = 48f;
     private static final float LINE_HEIGHT = 16f;
     private final TransferManifestPdfRepository pdfRepository;
+    private final S3StorageService storage;
 
-    public TransferManifestPdfService(TransferManifestPdfRepository pdfRepository) {
+    public TransferManifestPdfService(TransferManifestPdfRepository pdfRepository, S3StorageService storage) {
         this.pdfRepository = pdfRepository;
+        this.storage = storage;
     }
 
     @Transactional
@@ -38,7 +43,17 @@ public class TransferManifestPdfService {
 
         var existing = pdfRepository.findByManifest_IdAndLang(manifest.getId(), normalizedLang);
         if (existing.isPresent()) {
-            return existing.get().getPdfData();
+            TransferManifestPdf archive = existing.get();
+            if (!isArchivedPdfStale(manifest, archive)) {
+                return archive.getPdfData();
+            }
+
+            byte[] pdfBytes = generateOfficialManifestPdf(manifest, normalizedLang);
+            archive.setPdfData(pdfBytes);
+            archive.setGeneratedAt(OffsetDateTime.now());
+            archive.setGeneratedBy(generatedBy);
+            pdfRepository.save(archive);
+            return pdfBytes;
         }
 
         byte[] pdfBytes = generateOfficialManifestPdf(manifest, normalizedLang);
@@ -59,6 +74,17 @@ public class TransferManifestPdfService {
                     .map(TransferManifestPdf::getPdfData)
                     .orElseThrow(() -> e);
         }
+    }
+
+    private static boolean isArchivedPdfStale(TransferManifest manifest, TransferManifestPdf archive) {
+        OffsetDateTime signedAt = manifest.getSignedAt();
+        OffsetDateTime generatedAt = archive.getGeneratedAt();
+        return signedAt != null && (generatedAt == null || generatedAt.isBefore(signedAt));
+    }
+
+    @Transactional
+    public void deleteArchivedManifestPdfs(UUID manifestId) {
+        pdfRepository.deleteByManifest_Id(manifestId);
     }
 
     public byte[] generateOfficialManifestPdf(TransferManifest manifest, String lang) throws IOException {
@@ -119,17 +145,24 @@ public class TransferManifestPdfService {
                 y = writeWrapped(content, MARGIN, y, pageWidth - (2 * MARGIN), t("declarationText", locale), 10);
 
                 y -= 12;
-                float boxHeight = 92f;
+
+                float boxHeight = 112f;
                 float boxWidth = pageWidth - (2 * MARGIN);
                 float boxBottom = Math.max(56f, y - boxHeight);
                 content.addRect(MARGIN, boxBottom, boxWidth, boxHeight);
                 content.stroke();
 
+                byte[] signatureImageBytes = loadSignatureImageBytes(manifest);
+                if (signatureImageBytes != null) {
+                    PDImageXObject signatureImage = PDImageXObject.createFromByteArray(document, signatureImageBytes, "manifest-signature");
+                    drawImageInBox(content, signatureImage, MARGIN + 8, boxBottom + 42, boxWidth - 16, 38);
+                }
+
                 writeStatic(content, MARGIN + 8, boxBottom + boxHeight - 20, t("signaturePanel", locale), PDType1Font.HELVETICA_BOLD, 11);
                 writeStatic(content, MARGIN + 8, boxBottom + boxHeight - 38, t("signatureHint", locale), PDType1Font.HELVETICA, 10);
-                writeStatic(content, MARGIN + 8, boxBottom + boxHeight - 56, t("signatureBy", locale) + ": ____________________", PDType1Font.HELVETICA, 10);
-                writeStatic(content, MARGIN + 8, boxBottom + boxHeight - 72, t("signatureDate", locale) + ": _____________________________", PDType1Font.HELVETICA, 10);
-                writeStatic(content, MARGIN + 8, boxBottom + 8, t("verificationFooter", locale), PDType1Font.HELVETICA_OBLIQUE, 8);
+                writeStatic(content, MARGIN + 8, boxBottom + 28, t("signatureBy", locale) + ": " + nullSafe(manifest.getSignedBy()), PDType1Font.HELVETICA, 10);
+                writeStatic(content, MARGIN + 8, boxBottom + 16, t("signatureDate", locale) + ": " + formatDate(manifest.getSignedAt(), dateTimeFormatter), PDType1Font.HELVETICA, 10);
+                writeStatic(content, MARGIN + 8, boxBottom + 4, t("verificationFooter", locale), PDType1Font.HELVETICA_OBLIQUE, 8);
             }
 
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -137,6 +170,7 @@ public class TransferManifestPdfService {
             return out.toByteArray();
         }
     }
+
 
 
     private static PDDocument loadTemplateDocument() throws IOException {
@@ -154,6 +188,35 @@ public class TransferManifestPdfService {
             }
             return templateDocument;
         }
+    }
+
+
+    private byte[] loadSignatureImageBytes(TransferManifest manifest) throws IOException {
+        String signatureKey = manifest.getSignatureKey();
+        if (signatureKey == null || signatureKey.isBlank()) {
+            return null;
+        }
+
+        try (InputStream signatureInputStream = storage.get(signatureKey)) {
+            return signatureInputStream.readAllBytes();
+        } catch (Exception e) {
+            throw new IOException("could not load signature image", e);
+        }
+    }
+
+    private static void drawImageInBox(PDPageContentStream content, PDImageXObject image, float x, float y, float width, float height) throws IOException {
+        float imageWidth = image.getWidth();
+        float imageHeight = image.getHeight();
+        if (imageWidth <= 0 || imageHeight <= 0) {
+            return;
+        }
+
+        float scale = Math.min(width / imageWidth, height / imageHeight);
+        float drawWidth = imageWidth * scale;
+        float drawHeight = imageHeight * scale;
+        float drawX = x + ((width - drawWidth) / 2f);
+        float drawY = y + ((height - drawHeight) / 2f);
+        content.drawImage(image, drawX, drawY, drawWidth, drawHeight);
     }
 
     private static String nullSafe(Object value) {

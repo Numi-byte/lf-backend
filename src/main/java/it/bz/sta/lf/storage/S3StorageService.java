@@ -50,6 +50,14 @@ public class S3StorageService {
     }
 
 
+    public InputStream get(String objectKey) throws Exception {
+        return client.getObject(GetObjectArgs.builder()
+                .bucket(bucket)
+                .object(objectKey)
+                .build());
+    }
+
+
     public void delete(String objectKey) throws Exception {
         client.removeObject(RemoveObjectArgs.builder().bucket(bucket).object(objectKey).build());
     }

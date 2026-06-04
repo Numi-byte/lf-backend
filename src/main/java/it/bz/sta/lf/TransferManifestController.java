@@ -380,6 +380,8 @@ public class TransferManifestController {
                 manifest.getSignedBy(),
                 manifestAuditPayload
         );
+
+        pdfService.deleteArchivedManifestPdfs(manifest.getId());
     }
 
     private static DecodedSignature decodeSignatureDataUrl(String dataUrl) {
