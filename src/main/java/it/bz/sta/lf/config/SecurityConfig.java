@@ -50,7 +50,9 @@ public class SecurityConfig {
                                 "/items", "/items/**",
                                 "/locations", "/depots",
                                 "/api/items", "/api/items/**",
-                                "/api/locations", "/api/depots").permitAll()
+                                "/api/locations", "/api/depots",
+                                "/catalog/admin/categories", "/catalog/admin/visibility",
+                                "/api/catalog/admin/categories", "/api/catalog/admin/visibility").permitAll()
 
                         .requestMatchers("/catalog/admin/**", "/api/catalog/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
