@@ -6,12 +6,14 @@ import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -20,6 +22,8 @@ import java.util.Locale;
 @Service
 public class TransferManifestPdfService {
 
+    private static final String TEMPLATE_PATH = "templates/STA_Template (1).pdf";
+    private static final float TEMPLATE_HEADER_RESERVED_HEIGHT = 120f;
     private static final float MARGIN = 48f;
     private static final float LINE_HEIGHT = 16f;
     private final TransferManifestPdfRepository pdfRepository;
@@ -61,13 +65,18 @@ public class TransferManifestPdfService {
         Locale locale = toLocale(lang);
         DateTimeFormatter dateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm", locale);
 
-        try (PDDocument document = new PDDocument()) {
-            PDPage page = new PDPage(PDRectangle.A4);
-            document.addPage(page);
+        try (PDDocument document = loadTemplateDocument()) {
+            PDPage page = document.getPage(0);
 
-            try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+            try (PDPageContentStream content = new PDPageContentStream(
+                    document,
+                    page,
+                    PDPageContentStream.AppendMode.APPEND,
+                    true,
+                    true
+            )) {
                 float pageWidth = page.getMediaBox().getWidth();
-                float y = page.getMediaBox().getHeight() - MARGIN;
+                float y = page.getMediaBox().getHeight() - MARGIN - TEMPLATE_HEADER_RESERVED_HEIGHT;
 
                 y = drawTitle(content, pageWidth, y, t("officialTitle", locale));
                 y = drawLine(content, MARGIN, y, pageWidth - MARGIN, y);
@@ -126,6 +135,24 @@ public class TransferManifestPdfService {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             document.save(out);
             return out.toByteArray();
+        }
+    }
+
+
+    private static PDDocument loadTemplateDocument() throws IOException {
+        ClassPathResource templateResource = new ClassPathResource(TEMPLATE_PATH);
+        if (!templateResource.exists()) {
+            PDDocument fallbackDocument = new PDDocument();
+            fallbackDocument.addPage(new PDPage(PDRectangle.A4));
+            return fallbackDocument;
+        }
+
+        try (InputStream templateInputStream = templateResource.getInputStream()) {
+            PDDocument templateDocument = PDDocument.load(templateInputStream);
+            if (templateDocument.getNumberOfPages() == 0) {
+                templateDocument.addPage(new PDPage(PDRectangle.A4));
+            }
+            return templateDocument;
         }
     }
 
