@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
+import java.util.Optional;
 
 @RestController
 @RequestMapping("/admin/email-management")
@@ -36,7 +37,9 @@ public class ClaimEmailManagementController {
             @RequestHeader(value = "X-User", required = false) String user,
             @AuthenticationPrincipal AppUserPrincipal principal
     ) {
-        requireAdminUser(user, principal, companyAccessService);
+        if (tryRequireAdminUser(user, principal, companyAccessService).isEmpty()) {
+            return List.of();
+        }
         return emailManagementService.listSettings().stream()
                 .map(ClaimEmailSettingDto::from)
                 .toList();
@@ -69,23 +72,33 @@ public class ClaimEmailManagementController {
             AppUserPrincipal principal,
             CompanyAccessService companyAccessService
     ) {
+        return tryRequireAdminUser(user, principal, companyAccessService)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, "STA admin access required"));
+    }
+
+    private static Optional<AppUserPrincipal> tryRequireAdminUser(
+            String user,
+            AppUserPrincipal principal,
+            CompanyAccessService companyAccessService
+    ) {
         if (principal == null) {
             if (user == null || user.isBlank()) {
-                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required");
+                return Optional.empty();
             }
-            String company = companyAccessService.requireCompany(user);
-            if (!CompanyAccessService.DEFAULT_COMPANY.equals(company)) {
-                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "STA admin access required");
+            Optional<String> company = companyAccessService.resolveCompany(user)
+                    .map(companyAccessService::normalizeCompany);
+            if (company.isEmpty() || !CompanyAccessService.DEFAULT_COMPANY.equals(company.get())) {
+                return Optional.empty();
             }
-            return new AppUserPrincipal("legacy:" + user.trim(), user.trim(), "admin", company);
+            return Optional.of(new AppUserPrincipal("legacy:" + user.trim(), user.trim(), "admin", company.get()));
         }
 
         if (!principal.isAdmin()) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "admin access required");
+            return Optional.empty();
         }
         if (!CompanyAccessService.DEFAULT_COMPANY.equals(companyAccessService.normalizeCompany(principal.company()))) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "STA admin access required");
+            return Optional.empty();
         }
-        return principal;
+        return Optional.of(principal);
     }
 }

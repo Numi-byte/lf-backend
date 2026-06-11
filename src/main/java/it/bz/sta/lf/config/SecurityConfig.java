@@ -54,6 +54,11 @@ public class SecurityConfig {
                                 "/catalog/admin/categories", "/catalog/admin/visibility",
                                 "/api/catalog/admin/categories", "/api/catalog/admin/visibility").permitAll()
 
+                        // Let the SPA probe email-management availability without causing a browser 403.
+                        // The controller still returns real settings only to authorized STA admins.
+                        .requestMatchers(HttpMethod.GET,
+                                "/admin/email-management/settings",
+                                "/api/admin/email-management/settings").permitAll()
                         .requestMatchers("/admin/email-management/**", "/api/admin/email-management/**").authenticated()
                         .requestMatchers("/catalog/admin/**", "/api/catalog/admin/**").hasRole("ADMIN")
                         .requestMatchers("/admin/**", "/api/admin/**").hasRole("ADMIN")
