@@ -26,6 +26,7 @@ public class PublicItemController {
     private final ClaimRepository claims;
     private final AuditService audits;
     private final CompanyAccessService companyAccess;
+    private final ClaimEmailNotificationService claimEmailNotificationService;
 
     public PublicItemController(
             ItemRepository items,
@@ -33,7 +34,8 @@ public class PublicItemController {
             IdMatchRateLimiter rateLimiter,
             ClaimRepository claims,
             AuditService audits,
-            CompanyAccessService companyAccess
+            CompanyAccessService companyAccess,
+            ClaimEmailNotificationService claimEmailNotificationService
     ) {
         this.items = items;
         this.docs = docs;
@@ -41,6 +43,7 @@ public class PublicItemController {
         this.claims = claims;
         this.audits = audits;
         this.companyAccess = companyAccess;
+        this.claimEmailNotificationService = claimEmailNotificationService;
     }
 
     // ==== 1) Public ID-match request body ====
@@ -295,6 +298,7 @@ public class PublicItemController {
         c.setPublicReferenceCode(refCode);
 
         Claim saved = claims.save(c);
+        claimEmailNotificationService.sendClaimCreatedNotifications(saved);
 
         audits.log(
                 "CLAIM_CREATED_PUBLIC",

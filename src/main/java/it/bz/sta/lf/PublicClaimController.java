@@ -45,6 +45,7 @@ public class PublicClaimController {
         return doMyClaims(email, user);
     }
 
+
     private List<ClaimDto> doMyClaims(String email, String user) {
         if (user == null || user.isBlank()) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "login required to view claims");

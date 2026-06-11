@@ -24,19 +24,22 @@ public class ClaimController {
     private final ItemDocumentRepository itemDocuments;
     private final AuditService audits;
     private final CompanyAccessService companyAccess;
+    private final ClaimEmailNotificationService claimEmailNotificationService;
 
     public ClaimController(
             ClaimRepository claims,
             ItemRepository items,
             ItemDocumentRepository itemDocuments,
             AuditService audits,
-            CompanyAccessService companyAccess
+            CompanyAccessService companyAccess,
+            ClaimEmailNotificationService claimEmailNotificationService
     ) {
         this.claims = claims;
         this.items = items;
         this.itemDocuments = itemDocuments;
         this.audits = audits;
         this.companyAccess = companyAccess;
+        this.claimEmailNotificationService = claimEmailNotificationService;
     }
 
     // ----- Request DTOs -----
@@ -91,6 +94,7 @@ public class ClaimController {
                 })
                 .orElse(ResponseEntity.notFound().build());
     }
+
 
     @PostMapping
     public ResponseEntity<ClaimDto> create(
@@ -155,6 +159,7 @@ public class ClaimController {
         }
 
         Claim saved = claims.save(claim);
+        claimEmailNotificationService.sendClaimCreatedNotifications(saved);
 
         // Store result only in audit details (no need to persist docNumber)
         audits.log(
