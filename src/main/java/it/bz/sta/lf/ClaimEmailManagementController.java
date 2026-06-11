@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.Optional;
 
 @RestController
-@RequestMapping("/admin/email-management")
+@RequestMapping({"/admin/email-management", "/api/admin/email-management"})
 public class ClaimEmailManagementController {
 
     private final ClaimEmailManagementService emailManagementService;
@@ -93,12 +93,30 @@ public class ClaimEmailManagementController {
             return Optional.of(new AppUserPrincipal("legacy:" + user.trim(), user.trim(), "admin", company.get()));
         }
 
-        if (!principal.isAdmin()) {
+        String normalizedPrincipalCompany = companyAccessService.normalizeCompany(principal.company());
+        if (!CompanyAccessService.DEFAULT_COMPANY.equals(normalizedPrincipalCompany)) {
             return Optional.empty();
         }
-        if (!CompanyAccessService.DEFAULT_COMPANY.equals(companyAccessService.normalizeCompany(principal.company()))) {
-            return Optional.empty();
+
+        if (principal.isAdmin()) {
+            return Optional.of(principal);
         }
-        return Optional.of(principal);
+
+        // The legacy X-User fallback is trusted by AppAuthenticationFilter in development/back-office
+        // deployments, but UserRoleResolver marks those principals as customers unless auth.admin-emails
+        // is configured. Preserve the original STA X-User compatibility for this admin-only screen.
+        if (isLegacyPrincipal(principal) && user != null && !user.isBlank()) {
+            Optional<String> userCompany = companyAccessService.resolveCompany(user)
+                    .map(companyAccessService::normalizeCompany);
+            if (userCompany.isPresent() && CompanyAccessService.DEFAULT_COMPANY.equals(userCompany.get())) {
+                return Optional.of(new AppUserPrincipal(principal.id(), principal.email(), "admin", normalizedPrincipalCompany));
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private static boolean isLegacyPrincipal(AppUserPrincipal principal) {
+        return principal.id() != null && principal.id().startsWith("legacy:");
     }
 }
