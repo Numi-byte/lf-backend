@@ -54,6 +54,7 @@ public class SecurityConfig {
                                 "/catalog/admin/categories", "/catalog/admin/visibility",
                                 "/api/catalog/admin/categories", "/api/catalog/admin/visibility").permitAll()
 
+                        .requestMatchers("/admin/email-management/**", "/api/admin/email-management/**").authenticated()
                         .requestMatchers("/catalog/admin/**", "/api/catalog/admin/**").hasRole("ADMIN")
                         .requestMatchers("/admin/**", "/api/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
