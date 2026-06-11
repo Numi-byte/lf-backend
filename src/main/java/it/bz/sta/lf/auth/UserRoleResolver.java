@@ -59,6 +59,15 @@ public class UserRoleResolver {
             }
         }
 
+        // The legacy button login treats recognized STA users as back-office admins.
+        // Apply the same rule to MSAL principals so the Email Management screen
+        // receives data after Microsoft login too.
+        if (companyAccessService.resolveCompany(email)
+                .map(CompanyAccessService.DEFAULT_COMPANY::equals)
+                .orElse(false)) {
+            return "admin";
+        }
+
         return "customer";
     }
 

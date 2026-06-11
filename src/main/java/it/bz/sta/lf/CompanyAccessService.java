@@ -6,6 +6,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 @Service
@@ -13,31 +14,35 @@ public class CompanyAccessService {
 
     public static final String DEFAULT_COMPANY = "sta";
 
-    private static final List<String> COMPANIES = List.of(
-            "steinertouring",
-            "silbernagl",
-            "trenitalia",
-            "auto-rainer",
-            "autorainer",
-            "pizzinini",
-            "kronplatz",
-            "simobil",
-            "taferner",
-            "sasabz",
-            "holzer",
-            "ksm",
-            "sad",
-            "sta"
-    ).stream().sorted(Comparator.comparingInt(String::length).reversed()).toList();
+    private static final List<CompanyMatcher> COMPANY_MATCHERS = List.of(
+                    new CompanyMatcher("steinertouring", "steinertouring"),
+                    new CompanyMatcher("silbernagl", "silbernagl"),
+                    new CompanyMatcher("trenitalia", "trenitalia"),
+                    new CompanyMatcher("auto-rainer", "auto-rainer", "autorainer"),
+                    new CompanyMatcher("pizzinini", "pizzinini"),
+                    new CompanyMatcher("kronplatz", "kronplatz"),
+                    new CompanyMatcher("simobil", "simobil"),
+                    new CompanyMatcher("taferner", "taferner"),
+                    new CompanyMatcher("sasabz", "sasabz"),
+                    new CompanyMatcher("holzer", "holzer"),
+                    new CompanyMatcher("ksm", "ksm"),
+                    new CompanyMatcher("sad", "sad"),
+                    new CompanyMatcher(DEFAULT_COMPANY, DEFAULT_COMPANY, "suedtirolmobil", "südtirolmobil")
+            ).stream()
+            .flatMap(company -> company.tokens().stream()
+                    .map(token -> new CompanyMatcher(company.company(), token)))
+            .sorted(Comparator.comparingInt((CompanyMatcher matcher) -> matcher.token().length()).reversed())
+            .toList();
 
     public Optional<String> resolveCompany(String user) {
         if (user == null || user.isBlank()) {
             return Optional.empty();
         }
 
-        String normalizedUser = user.trim().toLowerCase();
-        return COMPANIES.stream()
-                .filter(normalizedUser::contains)
+        String normalizedUser = user.trim().toLowerCase(Locale.ROOT);
+        return COMPANY_MATCHERS.stream()
+                .filter(matcher -> normalizedUser.contains(matcher.token()))
+                .map(CompanyMatcher::company)
                 .findFirst();
     }
 
@@ -130,6 +135,17 @@ public class CompanyAccessService {
     public void ensureManifestAccess(String userCompany, TransferManifest manifest, String message) {
         if (manifest == null || manifest.getDepot() == null || !canAccessDepot(userCompany, manifest.getDepot())) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, message);
+        }
+    }
+
+    private record CompanyMatcher(String company, List<String> tokens) {
+
+        private CompanyMatcher(String company, String... tokens) {
+            this(company, List.of(tokens));
+        }
+
+        private String token() {
+            return tokens.get(0);
         }
     }
 }
