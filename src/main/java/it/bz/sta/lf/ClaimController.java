@@ -196,12 +196,15 @@ public class ClaimController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "method is required");
         }
 
+        String previousStatus = claim.getStatus();
+        Item item = claim.getItem();
+        String previousItemState = item == null ? null : item.getState();
+
         claim.setStatus("approved");
         claim.setMethod(req.method());
         claim.setFeeCents(req.feeCents() == null ? 0 : req.feeCents());
         claim.setUpdatedAt(OffsetDateTime.now());
 
-        Item item = claim.getItem();
         if (item != null) {
             String before = "{\"state\":\"" + item.getState() + "\"}";
             item.setState(Item.STATE_ON_HOLD);
@@ -216,6 +219,11 @@ public class ClaimController {
             );
         } else {
             audits.log("CLAIM_APPROVED", "CLAIM", claim.getId(), user, null);
+        }
+
+        String currentItemState = item == null ? null : item.getState();
+        if (statusChanged(previousStatus, claim.getStatus()) || statusChanged(previousItemState, currentItemState)) {
+            claimEmailNotificationService.sendClaimUpdatedNotifications(claim, previousStatus, previousItemState);
         }
 
         return ResponseEntity.ok(ClaimDto.from(claim));
@@ -234,12 +242,25 @@ public class ClaimController {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "claim not found"));
         companyAccess.ensureClaimAccess(company, claim, "claim not found");
 
+        String previousStatus = claim.getStatus();
+        Item item = claim.getItem();
+        String previousItemState = item == null ? null : item.getState();
+
         claim.setStatus("closed");
         claim.setUpdatedAt(OffsetDateTime.now());
 
         audits.log("CLAIM_CLOSED", "CLAIM", claim.getId(), user, null);
 
+        String currentItemState = item == null ? null : item.getState();
+        if (statusChanged(previousStatus, claim.getStatus()) || statusChanged(previousItemState, currentItemState)) {
+            claimEmailNotificationService.sendClaimUpdatedNotifications(claim, previousStatus, previousItemState);
+        }
+
         return ResponseEntity.ok(ClaimDto.from(claim));
+    }
+
+    private static boolean statusChanged(String before, String after) {
+        return before == null ? after != null : !before.equals(after);
     }
 
     private static void requireUser(String user, String message) {

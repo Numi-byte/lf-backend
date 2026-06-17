@@ -30,6 +30,18 @@ public class ClaimEmailSetting {
     @Column(name = "company_body_template", nullable = false)
     private String companyBodyTemplate;
 
+    @Column(name = "claimant_update_subject_template", nullable = false)
+    private String claimantUpdateSubjectTemplate;
+
+    @Column(name = "claimant_update_body_template", nullable = false)
+    private String claimantUpdateBodyTemplate;
+
+    @Column(name = "company_update_subject_template", nullable = false)
+    private String companyUpdateSubjectTemplate;
+
+    @Column(name = "company_update_body_template", nullable = false)
+    private String companyUpdateBodyTemplate;
+
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt = OffsetDateTime.now();
 
@@ -55,6 +67,18 @@ public class ClaimEmailSetting {
 
     public String getCompanyBodyTemplate() { return companyBodyTemplate; }
     public void setCompanyBodyTemplate(String companyBodyTemplate) { this.companyBodyTemplate = companyBodyTemplate; }
+
+    public String getClaimantUpdateSubjectTemplate() { return claimantUpdateSubjectTemplate; }
+    public void setClaimantUpdateSubjectTemplate(String claimantUpdateSubjectTemplate) { this.claimantUpdateSubjectTemplate = claimantUpdateSubjectTemplate; }
+
+    public String getClaimantUpdateBodyTemplate() { return claimantUpdateBodyTemplate; }
+    public void setClaimantUpdateBodyTemplate(String claimantUpdateBodyTemplate) { this.claimantUpdateBodyTemplate = claimantUpdateBodyTemplate; }
+
+    public String getCompanyUpdateSubjectTemplate() { return companyUpdateSubjectTemplate; }
+    public void setCompanyUpdateSubjectTemplate(String companyUpdateSubjectTemplate) { this.companyUpdateSubjectTemplate = companyUpdateSubjectTemplate; }
+
+    public String getCompanyUpdateBodyTemplate() { return companyUpdateBodyTemplate; }
+    public void setCompanyUpdateBodyTemplate(String companyUpdateBodyTemplate) { this.companyUpdateBodyTemplate = companyUpdateBodyTemplate; }
 
     public OffsetDateTime getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(OffsetDateTime updatedAt) { this.updatedAt = updatedAt; }

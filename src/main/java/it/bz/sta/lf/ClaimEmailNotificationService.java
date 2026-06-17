@@ -65,18 +65,35 @@ public class ClaimEmailNotificationService {
     }
 
     public void sendClaimCreatedNotifications(Claim claim) {
-        if (!enabled) {
-            log.info("Claim email notifications are disabled; claimId={}", claim.getId());
-            return;
-        }
-        if (!hasGraphConfig() && mailSender == null) {
-            log.warn("Claim email notifications are enabled but neither Microsoft Graph nor JavaMailSender is configured; claimId={}", claim.getId());
+        if (!canSend(claim)) {
             return;
         }
 
         String company = companyAccess.itemCompany(claim.getItem());
         sendToClaimant(claim);
         sendToCompany(claim, company);
+    }
+
+    public void sendClaimUpdatedNotifications(Claim claim, String previousStatus, String previousItemState) {
+        if (!canSend(claim)) {
+            return;
+        }
+
+        String company = companyAccess.itemCompany(claim.getItem());
+        sendUpdateToClaimant(claim, company, previousStatus, previousItemState);
+        sendUpdateToCompany(claim, company, previousStatus, previousItemState);
+    }
+
+    private boolean canSend(Claim claim) {
+        if (!enabled) {
+            log.info("Claim email notifications are disabled; claimId={}", claim.getId());
+            return false;
+        }
+        if (!hasGraphConfig() && mailSender == null) {
+            log.warn("Claim email notifications are enabled but neither Microsoft Graph nor JavaMailSender is configured; claimId={}", claim.getId());
+            return false;
+        }
+        return true;
     }
 
     private void sendToClaimant(Claim claim) {
@@ -99,6 +116,27 @@ public class ClaimEmailNotificationService {
 
         ClaimEmailTextService.ClaimEmailText text = claimEmailTextService.companyReceived(claim, company);
         send(recipient, text.subject(), text.body(), claim, "company");
+    }
+
+    private void sendUpdateToClaimant(Claim claim, String company, String previousStatus, String previousItemState) {
+        if (claim.getPassengerEmail() == null || claim.getPassengerEmail().isBlank()) {
+            log.warn("Skipping claimant update email because passengerEmail is missing; claimId={}", claim.getId());
+            return;
+        }
+
+        ClaimEmailTextService.ClaimEmailText text = claimEmailTextService.claimantUpdated(claim, company, previousStatus, previousItemState);
+        send(claim.getPassengerEmail(), text.subject(), text.body(), claim, "claimant update");
+    }
+
+    private void sendUpdateToCompany(Claim claim, String company, String previousStatus, String previousItemState) {
+        String recipient = emailManagementService.recipientsForCompany(company);
+        if (recipient == null || recipient.isBlank()) {
+            log.warn("Skipping company claim update notification because no recipient is configured for company={}; claimId={}", company, claim.getId());
+            return;
+        }
+
+        ClaimEmailTextService.ClaimEmailText text = claimEmailTextService.companyUpdated(claim, company, previousStatus, previousItemState);
+        send(recipient, text.subject(), text.body(), claim, "company update");
     }
 
     private void send(String to, String subject, String body, Claim claim, String recipientType) {
