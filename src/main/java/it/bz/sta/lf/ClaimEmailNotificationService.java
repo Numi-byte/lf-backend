@@ -139,11 +139,17 @@ public class ClaimEmailNotificationService {
         send(recipient, text.subject(), text.body(), claim, "company update");
     }
 
-    private void send(String to, String subject, String body, Claim claim, String recipientType) {
+    public boolean canSendMail() {
+        return enabled && (hasGraphConfig() || mailSender != null);
+    }
+
+    public void sendAuthenticationEmail(String to, String subject, String body) {
+        if (!canSendMail()) {
+            throw new MailException("Email delivery is disabled or no mail sender is configured") {};
+        }
         String[] recipients = recipients(to);
         if (recipients.length == 0) {
-            log.warn("Skipping {} claim email notification because no valid recipient is configured; claimId={}", recipientType, claim.getId());
-            return;
+            throw new MailException("No valid recipient is configured") {};
         }
 
         try {
@@ -152,6 +158,15 @@ public class ClaimEmailNotificationService {
             } else {
                 sendWithJavaMail(recipients, subject, body);
             }
+            log.info("Sent authentication OTP email to={}", to);
+        } catch (Exception e) {
+            throw new MailException("Could not send authentication OTP email to=" + to, e) {};
+        }
+    }
+
+    private void send(String to, String subject, String body, Claim claim, String recipientType) {
+        try {
+            sendAuthenticationEmail(to, subject, body);
             log.info("Sent {} claim email notification for claimId={} to={}", recipientType, claim.getId(), to);
         } catch (Exception e) {
             log.error("Could not send {} claim email notification for claimId={} to={}", recipientType, claim.getId(), to, e);

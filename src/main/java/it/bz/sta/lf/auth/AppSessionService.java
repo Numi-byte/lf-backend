@@ -25,9 +25,13 @@ public class AppSessionService {
     }
 
     public AppSession create(AppUserPrincipal user) {
+        return create(user, Duration.ofMinutes(Math.max(5, sessionTtlMinutes)));
+    }
+
+    public AppSession create(AppUserPrincipal user, Duration ttl) {
         String token = newToken();
         Instant now = Instant.now();
-        Instant expiresAt = now.plus(Duration.ofMinutes(Math.max(5, sessionTtlMinutes)));
+        Instant expiresAt = now.plus(ttl);
 
         AppSessionEntity entity = new AppSessionEntity();
         entity.setToken(token);
