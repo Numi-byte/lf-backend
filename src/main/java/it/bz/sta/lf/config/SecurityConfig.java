@@ -45,6 +45,11 @@ public class SecurityConfig {
                         .requestMatchers("/public/**", "/api/public/**").permitAll()
                         .requestMatchers("/auth/**", "/api/auth/**").permitAll()
 
+                        // ✅ health checks for Docker, load balancers, and monitoring
+                        .requestMatchers(HttpMethod.GET,
+                                "/actuator/health", "/actuator/health/**",
+                                "/actuator/info").permitAll()
+
                         // Public read-only API endpoints
                         .requestMatchers(HttpMethod.GET,
                                 "/items", "/items/**",
