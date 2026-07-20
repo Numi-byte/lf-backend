@@ -1,0 +1,50 @@
+#deploy pipe for github actions: build docker image, push to ECR and deploy to ECS
+on:
+  push:
+    branches: [ "dev", "main", "staging" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build:
+    environment: ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ECR }}
+          role-session-name: github-actions
+          aws-region: ${{ secrets.AWS_REGION || 'eu-central-1' }}
+      - name: Build Docker image
+        run: |
+          docker build \
+            --tag "${{ secrets.SERVICE_NAME }}:${{ secrets.TAG }}" .
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Push image to Amazon ECR
+        run: |
+          docker tag ${{ secrets.SERVICE_NAME }}:${{ secrets.TAG }} ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/${{ secrets.SERVICE_NAME }}:${{ secrets.TAG }}
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/${{ secrets.SERVICE_NAME }}:${{ secrets.TAG }}
+
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ECS }}
+          role-session-name: github-actions
+          aws-region: ${{ secrets.AWS_REGION || 'eu-central-1' }}
+      - name: Download task definition
+        run: |
+          aws ecs describe-task-definition --task-definition ${{secrets.SERVICE_NAME}}-${{ secrets.TAG }} --query taskDefinition > task-definition.json
+      - name: Deploy to Amazon ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          cluster: ${{ secrets.CLUSTER_NAME }}
+          service: ${{ secrets.SERVICE_NAME }}-service-${{ secrets.TAG }}
+          force-new-deployment: true
+          task-definition: task-definition.json
