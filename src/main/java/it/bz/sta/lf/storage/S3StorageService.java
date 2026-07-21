@@ -1,20 +1,35 @@
 package it.bz.sta.lf.storage;
 
 
-import io.minio.*;
-import io.minio.http.Method;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.S3Configuration;
+import software.amazon.awssdk.services.s3.model.BucketAlreadyOwnedByYouException;
+import software.amazon.awssdk.services.s3.model.CreateBucketRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
+import software.amazon.awssdk.services.s3.model.NoSuchBucketException;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 
 
 import java.io.InputStream;
+import java.net.URI;
 import java.time.Duration;
-import java.util.Map;
 
 
 @Service
 public class S3StorageService {
-    private final MinioClient client;
+    private final S3Client client;
+    private final S3Presigner presigner;
     private final String bucket;
 
 
@@ -22,43 +37,93 @@ public class S3StorageService {
             @Value("${s3.endpoint}") String endpoint,
             @Value("${s3.accessKey}") String accessKey,
             @Value("${s3.secretKey}") String secretKey,
-            @Value("${s3.bucket}") String bucket) throws Exception {
+            @Value("${s3.bucket}") String bucket,
+            @Value("${s3.region:eu-west-1}") String region) {
+            if (bucket == null || bucket.isBlank()) {
+                throw new IllegalArgumentException("s3.bucket must be configured");
+            }
         this.bucket = bucket;
-        this.client = MinioClient.builder().endpoint(endpoint).credentials(accessKey, secretKey).build();
-        boolean exists = client.bucketExists(BucketExistsArgs.builder().bucket(bucket).build());
-        if (!exists) client.makeBucket(MakeBucketArgs.builder().bucket(bucket).build());
+
+        URI endpointUri = URI.create(endpoint);
+        Region awsRegion = Region.of(region == null || region.isBlank() ? "eu-west-1" : region);
+        StaticCredentialsProvider credentialsProvider = StaticCredentialsProvider.create(
+                AwsBasicCredentials.create(accessKey, secretKey)
+        );
+        S3Configuration s3Configuration = S3Configuration.builder()
+                .pathStyleAccessEnabled(true)
+                .build();
+
+        this.client = S3Client.builder()
+                .endpointOverride(endpointUri)
+                .region(awsRegion)
+                .credentialsProvider(credentialsProvider)
+                .serviceConfiguration(s3Configuration)
+                .build();
+        this.presigner = S3Presigner.builder()
+                .endpointOverride(endpointUri)
+                .region(awsRegion)
+                .credentialsProvider(credentialsProvider)
+                .serviceConfiguration(s3Configuration)
+                .build();
+
+        ensureBucketExists();
     }
 
 
-    public void put(String objectKey, InputStream in, long size, String contentType) throws Exception {
-        client.putObject(PutObjectArgs.builder()
+    public void put(String objectKey, InputStream in, long size, String contentType) {
+        client.putObject(PutObjectRequest.builder()
+                        .bucket(bucket)
+                        .key(objectKey)
+                        .contentType(contentType)
+                        .build(),
+                RequestBody.fromInputStream(in, size));
+    }
+
+
+    public String presignGet(String objectKey, Duration ttl) {
+        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
                 .bucket(bucket)
-                .object(objectKey)
-                .stream(in, size, -1)
-                .contentType(contentType)
+                .key(objectKey)
+                .build();
+        GetObjectPresignRequest presignRequest = GetObjectPresignRequest.builder()
+                .signatureDuration(ttl)
+                .getObjectRequest(getObjectRequest)
+                .build();
+        return presigner.presignGetObject(presignRequest).url().toString();
+    }
+
+
+    public InputStream get(String objectKey) {
+        return client.getObject(GetObjectRequest.builder()
+                .bucket(bucket)
+                .key(objectKey)
                 .build());
     }
 
 
-    public String presignGet(String objectKey, Duration ttl) throws Exception {
-        return client.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
-                .bucket(bucket)
-                .object(objectKey)
-                .method(Method.GET)
-                .expiry((int) ttl.toSeconds())
-                .build());
+    public void delete(String objectKey) {
+        client.deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(objectKey).build());
     }
 
-
-    public InputStream get(String objectKey) throws Exception {
-        return client.getObject(GetObjectArgs.builder()
-                .bucket(bucket)
-                .object(objectKey)
-                .build());
+    private void ensureBucketExists() {
+        try {
+            client.headBucket(HeadBucketRequest.builder().bucket(bucket).build());
+        } catch (NoSuchBucketException e) {
+            createBucket();
+        } catch (S3Exception e) {
+            if (e.statusCode() == 404) {
+                createBucket();
+                return;
+            }
+            throw e;
+        }
     }
 
-
-    public void delete(String objectKey) throws Exception {
-        client.removeObject(RemoveObjectArgs.builder().bucket(bucket).object(objectKey).build());
+    private void createBucket() {
+        try {
+            client.createBucket(CreateBucketRequest.builder().bucket(bucket).build());
+        } catch (BucketAlreadyOwnedByYouException ignored) {
+            // The bucket was created between the existence check and the create request.
+        }
     }
 }
