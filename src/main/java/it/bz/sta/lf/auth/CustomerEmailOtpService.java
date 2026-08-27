@@ -1,7 +1,10 @@
 package it.bz.sta.lf.auth;
 
 import it.bz.sta.lf.ClaimEmailNotificationService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.mail.MailException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,6 +23,8 @@ import static org.springframework.http.HttpStatus.*;
 
 @Service
 public class CustomerEmailOtpService {
+    private static final Logger log = LoggerFactory.getLogger(CustomerEmailOtpService.class);
+
     private final SecureRandom secureRandom = new SecureRandom();
     private final CustomerEmailOtpRepository otps;
     private final ClaimEmailNotificationService mailService;
@@ -67,11 +72,16 @@ public class CustomerEmailOtpService {
         otp.setExpiresAt(now.plus(Duration.ofMinutes(Math.max(1, otpTtlMinutes))));
         otps.save(otp);
 
-        mailService.sendAuthenticationEmail(
-                normalizedEmail,
-                subject,
-                "Your sign-in code is " + code + ". It expires in " + Math.max(1, otpTtlMinutes) + " minutes."
-        );
+        try {
+            mailService.sendAuthenticationEmail(
+                    normalizedEmail,
+                    subject,
+                    "Your sign-in code is " + code + ". It expires in " + Math.max(1, otpTtlMinutes) + " minutes."
+            );
+        } catch (MailException e) {
+            log.error("Could not send customer OTP email to={}", normalizedEmail, e);
+            throw new ResponseStatusException(SERVICE_UNAVAILABLE, "OTP email delivery is temporarily unavailable");
+        }
     }
 
     @Transactional

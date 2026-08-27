@@ -91,14 +91,16 @@ public class AuthController {
         if (request == null) {
             throw new ResponseStatusException(BAD_REQUEST, "email is required");
         }
-        String deviceToken = cookieValue(servletRequest, otpDeviceCookieName);
-        if (deviceToken == null || deviceToken.isBlank()) {
-            deviceToken = customerEmailOtpService.newDeviceToken();
-        }
-        customerEmailOtpService.requestOtp(request.email(), deviceToken);
-        int deviceCookieMaxAge = Math.toIntExact(Math.min(Integer.MAX_VALUE, Math.max(1, customerOtpTtlMinutes) * 60));
-        writeCookie(response, otpDeviceCookieName, deviceToken, deviceCookieMaxAge);
-        return ResponseEntity.accepted().build();
+        return requestCustomerOtp(request.email(), servletRequest, response);
+    }
+
+    @GetMapping("/customer/otp/request")
+    public ResponseEntity<Void> requestCustomerOtpFromQuery(
+            @RequestParam(required = false) String email,
+            HttpServletRequest servletRequest,
+            HttpServletResponse response
+    ) {
+        return requestCustomerOtp(email, servletRequest, response);
     }
 
     @PostMapping("/customer/otp/verify")
@@ -134,6 +136,24 @@ public class AuthController {
         writeSessionCookie(response, "", 0);
         writeCookie(response, otpDeviceCookieName, "", 0);
         return ResponseEntity.noContent().build();
+    }
+
+    private ResponseEntity<Void> requestCustomerOtp(
+            String email,
+            HttpServletRequest servletRequest,
+            HttpServletResponse response
+    ) {
+        if (email == null || email.isBlank()) {
+            throw new ResponseStatusException(BAD_REQUEST, "email is required");
+        }
+        String deviceToken = cookieValue(servletRequest, otpDeviceCookieName);
+        if (deviceToken == null || deviceToken.isBlank()) {
+            deviceToken = customerEmailOtpService.newDeviceToken();
+        }
+        customerEmailOtpService.requestOtp(email, deviceToken);
+        int deviceCookieMaxAge = Math.toIntExact(Math.min(Integer.MAX_VALUE, Math.max(1, customerOtpTtlMinutes) * 60));
+        writeCookie(response, otpDeviceCookieName, deviceToken, deviceCookieMaxAge);
+        return ResponseEntity.accepted().build();
     }
 
     private void writeSessionCookie(HttpServletResponse response, String value, int maxAge) {
