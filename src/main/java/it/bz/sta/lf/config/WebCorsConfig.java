@@ -13,6 +13,7 @@ public class WebCorsConfig implements WebMvcConfigurer {
         registry.addMapping("/**")
                 // React dev server
                 .allowedOriginPatterns(
+                        "https://lf-frontend-dun.vercel.app",
                         "http://localhost:3000",
                         "http://127.0.0.1:3000",
                         "http://localhost:5173",
@@ -30,7 +31,7 @@ public class WebCorsConfig implements WebMvcConfigurer {
                 .allowedMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
 
-                .allowCredentials(false)
+                .allowCredentials(true)
                 .maxAge(3600);
     }
 }
